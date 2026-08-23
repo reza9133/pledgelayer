@@ -1,0 +1,55 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-ink-600;
+  }
+
+  ::selection {
+    @apply bg-brass-500/30 text-paper-100;
+  }
+
+  body {
+    font-feature-settings: 'ss01' on, 'ss02' on;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-brass-400 ring-offset-2 ring-offset-ink-900;
+  }
+}
+
+@layer components {
+  .ledger-card {
+    @apply relative rounded-lg border border-ink-600 bg-ink-800/80 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset];
+  }
+
+  .eyebrow {
+    @apply font-mono text-[11px] uppercase tracking-[0.18em] text-paper-400;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply btn bg-brass-500 text-ink-950 hover:bg-brass-400 active:bg-brass-600;
+  }
+
+  .btn-secondary {
+    @apply btn border border-ink-500 bg-ink-800 text-paper-100 hover:border-brass-500/50 hover:bg-ink-700;
+  }
+
+  .btn-danger {
+    @apply btn border border-verdict-reject/40 bg-verdict-rejectDim text-verdict-reject hover:border-verdict-reject/70;
+  }
+
+  .field-label {
+    @apply mb-1.5 block font-mono text-[11px] uppercase tracking-[0.14em] text-paper-400;
+  }
+
+  .field-input {
+    @apply w-full rounded-md border border-ink-500 bg-ink-900 px-3.5 py-2.5 text-sm text-paper-100 placeholder:text-paper-400/60 focus:border-brass-500/60;
+  }
+}
