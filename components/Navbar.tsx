@@ -22,11 +22,11 @@ export function Navbar() {
           <Link href="/" className="text-sm text-paper-300 transition-colors hover:text-paper-100">
             Explore
           </Link>
-          <Link
-            href="/create"
-            className="text-sm text-paper-300 transition-colors hover:text-paper-100"
-          >
+          <Link href="/create" className="text-sm text-paper-300 transition-colors hover:text-paper-100">
             Start a campaign
+          </Link>
+          <Link href="/about" className="text-sm text-paper-300 transition-colors hover:text-paper-100">
+            About
           </Link>
         </nav>
 
