@@ -2,7 +2,7 @@
 """
 PledgeLayer Platform - Complete Intelligent Contract
 ===================================================
-Cleaned up refund mechanism with native GenLayer state-safe accounting.
+Implemented native transfers, CEI pattern, and full stranded-funds prevention.
 """
 
 from genlayer import *
@@ -10,7 +10,17 @@ from dataclasses import dataclass
 import json
 
 # ---------------------------------------------------------------------------
-# 1. Top-Level Non-Deterministic AI Module (Consensus Wrapper)
+# 1. Native Transfer Interface
+# ---------------------------------------------------------------------------
+@gl.evm.contract_interface
+class _Recipient:
+    class View:
+        pass
+    class Write:
+        pass
+
+# ---------------------------------------------------------------------------
+# 2. Top-Level Non-Deterministic AI Module (Consensus Wrapper)
 # ---------------------------------------------------------------------------
 def _evaluate_milestone_nondet(m_title: str, m_desc: str, m_evidence_text: str) -> dict:
     prompt = f"""
@@ -50,7 +60,7 @@ def _evaluate_milestone_nondet(m_title: str, m_desc: str, m_evidence_text: str) 
 
 
 # ---------------------------------------------------------------------------
-# 2. Persistent Storage Dataclasses
+# 3. Persistent Storage & View Dataclasses
 # ---------------------------------------------------------------------------
 @allow_storage
 @dataclass
@@ -79,10 +89,6 @@ class Milestone:
     rejection_count: u32
     ai_feedback: str
 
-
-# ---------------------------------------------------------------------------
-# 3. View-Return Dataclasses
-# ---------------------------------------------------------------------------
 @dataclass
 class CampaignView:
     exists: bool
@@ -138,13 +144,8 @@ class PledgeLayerPlatform(gl.Contract):
     # =====================================================================
     @gl.public.write
     def create_campaign(
-        self, 
-        title: str, 
-        description: str, 
-        funding_goal_whole_tokens: u32, 
-        milestone_titles: list[str], 
-        milestone_descriptions: list[str], 
-        milestone_ratios_bps: list[u32]
+        self, title: str, description: str, funding_goal_whole_tokens: u32, 
+        milestone_titles: list[str], milestone_descriptions: list[str], milestone_ratios_bps: list[u32]
     ) -> u32:
         title = str(title)
         description = str(description)
@@ -211,6 +212,34 @@ class PledgeLayerPlatform(gl.Contract):
         )
 
     @gl.public.write
+    def revoke_funding(self, campaign_id: u32) -> None:
+        """Allows backers to withdraw funds if the campaign is indefinitely underfunded (stuck in FUNDING)."""
+        cid = u32(campaign_id)
+        player = gl.message.sender_address
+        c = self._get_campaign_or_raise(cid)
+        
+        if c.status != "FUNDING":
+            raise gl.vm.UserError("Can only revoke funds during the FUNDING phase")
+
+        contrib_key = f"{int(cid)}_{str(player)}"
+        user_contrib = self.campaign_contributions.get(contrib_key, u256(0))
+        if user_contrib == u256(0):
+            raise gl.vm.UserError("No contribution found")
+
+        # CEI: Apply Effects First
+        self.campaign_contributions[contrib_key] = u256(0)
+        self.campaigns[cid] = Campaign(
+            campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
+            funding_goal=c.funding_goal, 
+            total_funded=u256(int(c.total_funded) - int(user_contrib)), 
+            remaining_funds=u256(int(c.remaining_funds) - int(user_contrib)),
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
+        )
+
+        # CEI: Interaction
+        _Recipient(Address(str(player))).emit_transfer(value=user_contrib)
+
+    @gl.public.write
     def cancel_campaign(self, campaign_id: u32) -> None:
         cid = u32(campaign_id)
         c = self._get_campaign_or_raise(cid)
@@ -270,28 +299,41 @@ class PledgeLayerPlatform(gl.Contract):
         feedback = result.get("detailed_feedback", "No feedback provided")
 
         if decision == "APPROVED":
-            target = (int(c.funding_goal) * int(m.ratio_bps)) // 10000
-            rem_funds = int(c.remaining_funds)
-            actual_payout = target if target < rem_funds else rem_funds
+            new_idx = u32(int(c.current_milestone_index) + 1)
+            is_final = int(new_idx) == int(c.milestone_count)
+            
+            if is_final:
+                # Prevent stranded funds: Last milestone pays out ALL remaining escrow (including any surplus).
+                actual_payout = int(c.remaining_funds)
+            else:
+                # Handle overfunding gracefully: payout is proportional to total_funded, not just funding_goal.
+                target = (int(c.total_funded) * int(m.ratio_bps)) // 10000
+                rem_funds = int(c.remaining_funds)
+                actual_payout = target if target < rem_funds else rem_funds
             
             plat_fee = (actual_payout * int(self.platform_fee_bps)) // 10000
             creator_payout = actual_payout - plat_fee
             
+            # CEI: Apply Effects First
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description, 
                 ratio_bps=m.ratio_bps, status="APPROVED", evidence_text=m.evidence_text, 
                 rejection_count=m.rejection_count, ai_feedback=str(feedback)
             )
             
-            new_idx = u32(int(c.current_milestone_index) + 1)
-            new_status = "ACTIVE" if int(new_idx) < int(c.milestone_count) else "COMPLETED"
-                
             self.campaigns[cid] = Campaign(
                 campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
                 funding_goal=c.funding_goal, total_funded=c.total_funded, 
-                remaining_funds=u256(rem_funds - actual_payout),
-                current_milestone_index=new_idx, milestone_count=c.milestone_count, status=new_status
+                remaining_funds=u256(int(c.remaining_funds) - actual_payout),
+                current_milestone_index=new_idx, milestone_count=c.milestone_count, status="COMPLETED" if is_final else "ACTIVE"
             )
+            
+            # CEI: Interactions (Native Transfers)
+            if creator_payout > 0:
+                _Recipient(Address(str(c.creator))).emit_transfer(value=u256(creator_payout))
+            if plat_fee > 0:
+                _Recipient(Address(str(self.platform_owner))).emit_transfer(value=u256(plat_fee))
+                
         else:
             new_rejects = u32(int(m.rejection_count) + 1)
             new_status = "FAILED" if int(new_rejects) >= 2 else "ACTIVE"
@@ -328,8 +370,8 @@ class PledgeLayerPlatform(gl.Contract):
         if r_amount <= 0 or r_amount > int(c.remaining_funds):
             raise gl.vm.UserError("Invalid refund math")
 
+        # CEI: Apply Effects First
         self.campaign_contributions[contrib_key] = u256(0)
-        
         self.campaigns[cid] = Campaign(
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
             funding_goal=c.funding_goal, total_funded=c.total_funded, 
@@ -337,7 +379,8 @@ class PledgeLayerPlatform(gl.Contract):
             current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
         )
 
-        # Removed invalid transfer helper to eliminate AttributeError on testnet runtime
+        # CEI: Interactions (Native Transfer)
+        _Recipient(Address(str(player))).emit_transfer(value=u256(r_amount))
 
     # =====================================================================
     # VIEW METHODS
