@@ -222,3 +222,7 @@ export async function adjudicateMilestone(address: `0x${string}`, campaignId: nu
 export async function claimRefund(address: `0x${string}`, campaignId: number) {
   return sendWrite(address, 'claim_refund', [campaignId]);
 }
+
+export async function revokeFunding(address: `0x${string}`, campaignId: number) {
+  return sendWrite(address, 'revoke_funding', [campaignId]);
+}
