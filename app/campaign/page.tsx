@@ -21,6 +21,7 @@ import {
   submitMilestone,
   adjudicateMilestone,
   claimRefund,
+  revokeFunding, 
 } from '@/lib/genlayerClient';
 import type { CampaignView, MilestoneView } from '@/lib/types';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -41,7 +42,7 @@ function CampaignDetail({ id }: { id: number }) {
   const [showFundModal, setShowFundModal] = useState(false);
 
   const [busy, setBusy] = useState<
-    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund'
+    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke' // <--- آپدیت شد
   >(null);
 
   const load = useCallback(async () => {
@@ -134,6 +135,20 @@ function CampaignDetail({ id }: { id: number }) {
     }
   }
 
+  async function handleRevokeFunding() {
+    if (!address) return push('Connect your wallet first.', 'error');
+    setBusy('revoke');
+    try {
+      await revokeFunding(address, id);
+      push('Funding revoked — check your wallet balance.', 'success');
+      await load();
+    } catch (err: any) {
+      push(err?.message ?? 'Revoke failed. You may not have a claimable contribution.', 'error');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return <div className="ledger-card h-64 animate-pulse bg-ink-700/40" />;
   }
@@ -200,6 +215,14 @@ function CampaignDetail({ id }: { id: number }) {
             <Coins size={15} /> Fund this campaign
           </button>
         )}
+        
+        {campaign.status === 'FUNDING' && (
+          <button onClick={handleRevokeFunding} disabled={busy === 'revoke'} className="btn-secondary">
+            {busy === 'revoke' ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
+            Revoke Funding
+          </button>
+        )}
+
         {campaign.status === 'FUNDING' && isCreator && (
           <button onClick={handleCancel} disabled={busy === 'cancel'} className="btn-danger">
             {busy === 'cancel' ? <Loader2 size={14} className="animate-spin" /> : <Ban size={14} />}
@@ -219,9 +242,9 @@ function CampaignDetail({ id }: { id: number }) {
         )}
       </div>
 
-      {canRefund && (
+      {(canRefund || campaign.status === 'FUNDING') && (
         <p className="rounded-md border border-ink-600 bg-ink-800/60 px-4 py-3 text-xs text-paper-400">
-          Refunds are proportional to unreleased escrow. The contract does not expose a view method
+          Refunds and revocations are safe. The contract does not expose a view method
           for your exact contribution, so the amount isn&rsquo;t shown ahead of time — claiming is
           safe even if you didn&rsquo;t contribute; it simply reverts.
         </p>
@@ -279,8 +302,8 @@ function CampaignPageInner() {
   return (
     <div className="space-y-6">
       {!address && (
-        <div className="ledger-card flex flex-wrap items-center justify-between gap-3 p-4">
-          <p className="text-sm text-paper-300">
+        <div className="ledger-card flex flex-wrap items-center gap-3 p-4">
+          <p className="text-sm text-paper-300 flex-1">
             Connect a wallet to fund, manage, or claim refunds on this campaign.
           </p>
           <WalletButton />
