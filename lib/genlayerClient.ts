@@ -5,7 +5,7 @@ import { CONTRACT_ADDRESS } from './contract';
 import type { CampaignView, MilestoneView } from './types';
 import { toBigInt, toNumber } from './format';
 
-let activeProvider: any = typeof window !== 'undefined' ? (window as any).ethereum : null;
+let activeProvider: any = null;
 
 export function setActiveProvider(provider: any) {
   activeProvider = provider;
@@ -77,15 +77,6 @@ export async function ensureCorrectNetwork(address: `0x${string}`) {
 
 // ---------------------------------------------------------------------------
 // Normalizers
-//
-// NOTE: genlayer-js decodes contract dataclass returns into a plain JS object
-// keyed by the dataclass's field names (snake_case, matching the Python
-// source). These normalizers read snake_case keys defensively and fall back
-// to camelCase in case a future SDK version changes that convention — but
-// they have not been exercised against a live Bradbury node from this
-// environment, so double check field names against one real
-// `readContract({ functionName: 'get_campaign', ... })` call and adjust here
-// if anything doesn't line up.
 // ---------------------------------------------------------------------------
 
 function pick(obj: any, snake: string, camel: string) {
@@ -142,18 +133,6 @@ export async function getMilestone(campaignId: number, index: number): Promise<M
   return normalizeMilestone(raw);
 }
 
-/**
- * The contract does not expose a `get_campaign_count` (or equivalent) view
- * method, and `next_campaign_id` / `campaign_ids` are private state — so
- * there is no direct way to ask the contract "how many campaigns exist".
- *
- * Campaign IDs are assigned sequentially starting at 1 with no gaps
- * (create_campaign always increments next_campaign_id by exactly 1), so this
- * probes get_campaign(1), get_campaign(2), ... and stops once it hits
- * `missTolerance` consecutive non-existent IDs. This works reliably but
- * costs one RPC round-trip per campaign. See README.md for a two-line
- * contract addition that would make this instant and gap-proof.
- */
 export async function listCampaigns(options?: {
   maxScan?: number;
   missTolerance?: number;
@@ -188,12 +167,6 @@ export async function getAllMilestones(campaign: CampaignView): Promise<Mileston
 
 // ---------------------------------------------------------------------------
 // Writes
-//
-// Every write follows the same shape: send the transaction, then wait for it
-// to be ACCEPTED (fast) or FINALIZED (slower, fully settled) before treating
-// it as done. We wait for ACCEPTED here for snappier UX and always check
-// txExecutionResultName before assuming the state actually changed, since a
-// transaction can reach consensus while its execution itself reverted.
 // ---------------------------------------------------------------------------
 
 async function sendWrite(
