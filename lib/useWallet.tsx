@@ -2,6 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { setActiveProvider } from './genlayerClient';
+import { startProviderDiscovery, requestProviders, getProviderByRdns, WALLET_RDNS, type EIP1193Provider } from './providerDiscovery';
+import { withSnapShim } from './snapShim';
 
 export type WalletType = 'metamask' | 'okx' | 'rabby' | null;
 
@@ -25,25 +27,38 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const getProvider = useCallback((type: WalletType) => {
-    if (typeof window === 'undefined') return null;
+  useEffect(() => {
+    startProviderDiscovery();
+  }, []);
 
-    if (type === 'okx' && (window as any).okxwallet) return (window as any).okxwallet;
+  const getProvider = useCallback((type: WalletType): EIP1193Provider | null => {
+    if (typeof window === 'undefined' || !type) return null;
 
+    requestProviders();
+    const viaEip6963 = getProviderByRdns(WALLET_RDNS[type]);
+    if (viaEip6963) return viaEip6963;
+
+    const eth = (window as any).ethereum;
+    const candidates: any[] = eth?.providers?.length ? eth.providers : eth ? [eth] : [];
+
+    if (type === 'okx') {
+      return (window as any).okxwallet ?? candidates.find((p) => p.isOkxWallet) ?? null;
+    }
     if (type === 'rabby') {
-      if ((window as any).rabby) return (window as any).rabby;
-      if ((window as any).ethereum?.isRabby) return (window as any).ethereum;
+      return (
+        (window as any).rabby ??
+        candidates.find((p) => p.isRabby) ??
+        (eth?.isRabby ? eth : null)
+      );
     }
-
     if (type === 'metamask') {
-      const eth = (window as any).ethereum;
-      if (eth?.providers) {
-        return eth.providers.find((p: any) => p.isMetaMask) || eth;
-      }
-      return eth;
+      return (
+        candidates.find(
+          (p) => p.isMetaMask && !p.isRabby && !p.isOkxWallet && !p.isBraveWallet && !p.isCoinbaseWallet
+        ) ?? null
+      );
     }
-
-    return (window as any).ethereum;
+    return null;
   }, []);
 
   const connect = useCallback(async (type: WalletType) => {
@@ -65,7 +80,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         const addr = accounts[0] as `0x${string}`;
         setAddress(addr);
         setWalletType(type);
-        setActiveProvider(provider);
+        setActiveProvider(withSnapShim(provider, type === 'metamask'));
         window.sessionStorage.setItem(LAST_ADDRESS_KEY, addr);
         window.sessionStorage.setItem(LAST_WALLET_TYPE_KEY, type as string);
       }
@@ -101,7 +116,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
         if (list?.[0]) {
           setAddress(list[0] as `0x${string}`);
           setWalletType(rememberedType);
-          setActiveProvider(provider);
+          setActiveProvider(withSnapShim(provider, rememberedType === 'metamask'));
         }
       })
       .catch(() => {});
