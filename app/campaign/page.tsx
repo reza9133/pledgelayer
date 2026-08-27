@@ -40,6 +40,7 @@ function CampaignDetail({ id }: { id: number }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showFundModal, setShowFundModal] = useState(false);
+  const [claimed, setClaimed] = useState(false);
 
   const [busy, setBusy] = useState<
     null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke'
@@ -126,6 +127,7 @@ function CampaignDetail({ id }: { id: number }) {
     setBusy('refund');
     try {
       await claimRefund(address, id);
+      setClaimed(true);
       push('Refund claimed — check your wallet balance.', 'success');
       await load();
     } catch (err: any) {
@@ -245,9 +247,13 @@ function CampaignDetail({ id }: { id: number }) {
           </button>
         )}
         {canRefund && (
-          <button onClick={handleClaimRefund} disabled={busy === 'refund'} className="btn-primary">
+          <button 
+            onClick={handleClaimRefund} 
+            disabled={busy === 'refund' || claimed} 
+            className="btn-primary"
+          >
             {busy === 'refund' ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
-            Claim refund
+            {claimed ? 'Refund claimed' : 'Claim refund'}
           </button>
         )}
         {campaign.status === 'COMPLETED' && (
