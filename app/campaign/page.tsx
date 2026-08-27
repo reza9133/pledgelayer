@@ -42,7 +42,7 @@ function CampaignDetail({ id }: { id: number }) {
   const [showFundModal, setShowFundModal] = useState(false);
 
   const [busy, setBusy] = useState<
-    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke' // <--- آپدیت شد
+    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke'
   >(null);
 
   const load = useCallback(async () => {
@@ -169,7 +169,17 @@ function CampaignDetail({ id }: { id: number }) {
     );
   }
 
-  const pct = fundingProgressPct(campaign.totalFunded, campaign.fundingGoal);
+  // 1. Peak / Historical progress before cancellation or failure
+  const peakFunded = campaign.totalFunded;
+  const peakPct = fundingProgressPct(peakFunded, campaign.fundingGoal);
+
+  // 2. Current effective funded amount based on remaining escrow (updates with refunds)
+  const currentEffectiveFunded = (campaign.status === 'CANCELLED' || campaign.status === 'FAILED')
+    ? campaign.remainingFunds
+    : campaign.totalFunded;
+  
+  const currentPct = fundingProgressPct(currentEffectiveFunded, campaign.fundingGoal);
+
   const isCreator = !!address && address.toLowerCase() === campaign.creator.toLowerCase();
   const canRefund = campaign.status === 'FAILED' || campaign.status === 'CANCELLED';
 
@@ -197,11 +207,16 @@ function CampaignDetail({ id }: { id: number }) {
       </div>
 
       <div className="ledger-card space-y-3 p-5">
-        <ProgressBar pct={pct} />
+        <ProgressBar pct={currentPct} />
         <div className="flex flex-wrap items-baseline justify-between gap-2 font-mono text-sm">
-          <span className="text-paper-100">{formatTokenWithSymbol(campaign.totalFunded)} raised</span>
+          <span className="text-paper-100">{formatTokenWithSymbol(currentEffectiveFunded)} raised</span>
           <span className="text-paper-400">
-            of {formatTokenWithSymbol(campaign.fundingGoal)} goal &middot; {pct.toFixed(1)}%
+            of {formatTokenWithSymbol(campaign.fundingGoal)} goal &middot; {currentPct.toFixed(1)}%
+            {(campaign.status === 'CANCELLED' || campaign.status === 'FAILED') && peakPct > currentPct && (
+              <span className="ml-2 text-xs text-paper-500">
+                (Peak: {peakPct.toFixed(1)}% before {campaign.status.toLowerCase()})
+              </span>
+            )}
           </span>
         </div>
         <div className="text-xs text-paper-400">
@@ -292,7 +307,7 @@ function CampaignPageInner() {
     return (
       <div className="ledger-card p-8 text-center">
         <p className="text-sm text-paper-300">
-          No campaign ID given. Open a campaign from the docket, or add{' '}
+          No campaign given. Open a campaign from the docket, or add{' '}
           <code className="font-mono text-brass-400">?id=1</code> to the URL.
         </p>
       </div>
