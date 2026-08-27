@@ -243,6 +243,7 @@ None of this blocks using the app as-is (everything degrades gracefully), but de
 
 PRs and issues are welcome. For contract changes, please run (and extend, if needed) `tests/test_pledgelayer.py`; for frontend changes, run `npm run lint` and `npm run build` before submitting a PR.
 
+
 ## 📄 License
 
 No LICENSE file is specified in this repo yet — add one (e.g. MIT) before publishing publicly or expecting others to reuse the code.
