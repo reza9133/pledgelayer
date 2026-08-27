@@ -29,12 +29,12 @@ export function WalletButton() {
     return (
       <button
         onClick={disconnect}
-        className="btn-secondary group"
+        className="btn-secondary group flex items-center gap-2"
         title="Disconnect wallet"
       >
         <span className="h-1.5 w-1.5 rounded-full bg-verdict-approve" />
         <span className="font-mono text-xs">{shortenAddress(address)}</span>
-        <LogOut size={13} className="text-paper-400 group-hover:text-paper-100" />
+        <LogOut size={13} className="text-paper-400 group-hover:text-paper-100 transition-colors" />
       </button>
     );
   }
