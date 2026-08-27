@@ -5,6 +5,12 @@ import { CONTRACT_ADDRESS } from './contract';
 import type { CampaignView, MilestoneView } from './types';
 import { toBigInt, toNumber } from './format';
 
+let activeProvider: any = typeof window !== 'undefined' ? (window as any).ethereum : null;
+
+export function setActiveProvider(provider: any) {
+  activeProvider = provider;
+}
+
 /**
  * Read-only client. Talks directly to the GenLayer RPC — no wallet needed.
  * Safe to use on the server or before a wallet is connected.
@@ -14,17 +20,17 @@ export const readClient = createClient({
 });
 
 /**
- * Creates a write client bound to a connected wallet (e.g. MetaMask) so
+ * Creates a write client bound to a connected wallet so
  * transactions are signed by the user rather than a local key.
  */
 export function getWriteClient(address: `0x${string}`) {
-  if (typeof window === 'undefined' || !window.ethereum) {
-    throw new Error('No injected wallet found. Install MetaMask (or a compatible wallet) to continue.');
+  if (!activeProvider) {
+    throw new Error('No wallet provider found. Please connect your wallet first.');
   }
   return createClient({
     chain: testnetBradbury,
     account: address,
-    provider: window.ethereum,
+    provider: activeProvider,
   });
 }
 
