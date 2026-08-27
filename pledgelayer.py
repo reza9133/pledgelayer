@@ -303,10 +303,8 @@ class PledgeLayerPlatform(gl.Contract):
             is_final = int(new_idx) == int(c.milestone_count)
             
             if is_final:
-                # Prevent stranded funds: Last milestone pays out ALL remaining escrow (including any surplus).
                 actual_payout = int(c.remaining_funds)
             else:
-                # Handle overfunding gracefully: payout is proportional to total_funded, not just funding_goal.
                 target = (int(c.total_funded) * int(m.ratio_bps)) // 10000
                 rem_funds = int(c.remaining_funds)
                 actual_payout = target if target < rem_funds else rem_funds
@@ -364,8 +362,8 @@ class PledgeLayerPlatform(gl.Contract):
         if user_contrib == u256(0):
             raise gl.vm.UserError("No claimable contribution found")
 
-        r_ratio = (int(c.remaining_funds) * 1000000) // int(c.total_funded)
-        r_amount = (int(user_contrib) * r_ratio) // 1000000
+        # Fixed: Direct full refund of user contribution in CANCELLED/FAILED states
+        r_amount = int(user_contrib)
         
         if r_amount <= 0 or r_amount > int(c.remaining_funds):
             raise gl.vm.UserError("Invalid refund math")
