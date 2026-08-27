@@ -37,7 +37,41 @@ export function getWriteClient(address: `0x${string}`) {
 /** Prompts the connected wallet to switch to / add the Bradbury testnet. */
 export async function ensureCorrectNetwork(address: `0x${string}`) {
   const client = getWriteClient(address);
-  await client.connect('testnetBradbury');
+  
+  if (!activeProvider) return client;
+
+  const chainIdHex = `0x${testnetBradbury.id.toString(16)}`;
+
+  try {
+    await activeProvider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: chainIdHex }],
+    });
+  } catch (switchError: any) {
+    if (switchError?.code === 4902) {
+      try {
+        await activeProvider.request({
+          method: 'wallet_addEthereumChain',
+          params: [
+            {
+              chainId: chainIdHex,
+              chainName: testnetBradbury.name,
+              nativeCurrency: testnetBradbury.nativeCurrency,
+              rpcUrls: [...testnetBradbury.rpcUrls.default.http],
+              blockExplorerUrls: testnetBradbury.blockExplorers 
+                ? [testnetBradbury.blockExplorers.default.url] 
+                : [],
+            },
+          ],
+        });
+      } catch (addError) {
+        console.error('Failed to add GenLayer network:', addError);
+      }
+    } else {
+      console.error('Failed to switch network:', switchError);
+    }
+  }
+
   return client;
 }
 
