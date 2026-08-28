@@ -362,23 +362,51 @@ class PledgeLayerPlatform(gl.Contract):
         if user_contrib == u256(0):
             raise gl.vm.UserError("No claimable contribution found")
 
-        # Fixed: Direct full refund of user contribution in CANCELLED/FAILED states
-        r_amount = int(user_contrib)
-        
-        if r_amount <= 0 or r_amount > int(c.remaining_funds):
+        total_funded = int(c.total_funded)
+        remaining = int(c.remaining_funds)
+
+        if total_funded <= 0 or remaining <= 0:
+            raise gl.vm.UserError("No escrow remaining to refund")
+
+        # Pro-rata share of whatever is still sitting in escrow, not the
+        # backer's full original contribution. A CANCELLED campaign never
+        # had a milestone payout (cancel_campaign only allows CANCELLED
+        # from FUNDING), so remaining == total_funded there and this
+        # reduces to a full refund exactly as before. A FAILED campaign
+        # can arrive here after one or more milestones already paid out,
+        # so remaining < total_funded -- refunding backers their full
+        # original stake would overdraw the escrow, letting whichever
+        # backer claims first drain it and making every later, equally
+        # valid claim_refund call revert with "Invalid refund math".
+        r_amount = (int(user_contrib) * remaining) // total_funded
+
+        if r_amount > remaining:
             raise gl.vm.UserError("Invalid refund math")
 
-        # CEI: Apply Effects First
+        # CEI: Apply Effects First. Shrink total_funded by this backer's
+        # full original stake (not just their payout) alongside
+        # remaining_funds. That keeps remaining_funds / total_funded
+        # constant for backers who haven't claimed yet, so the next
+        # claim is still computed against its correct pro-rata share of
+        # the original escrow instead of a pool another backer's claim
+        # already (correctly) partially drained. total_funded is never
+        # read again once a campaign leaves FUNDING/ACTIVE, so this is
+        # safe to adjust here.
         self.campaign_contributions[contrib_key] = u256(0)
         self.campaigns[cid] = Campaign(
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
-            funding_goal=c.funding_goal, total_funded=c.total_funded, 
-            remaining_funds=u256(int(c.remaining_funds) - r_amount),
+            funding_goal=c.funding_goal,
+            total_funded=u256(total_funded - int(user_contrib)),
+            remaining_funds=u256(remaining - r_amount),
             current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
         )
 
-        # CEI: Interactions (Native Transfer)
-        _Recipient(Address(str(player))).emit_transfer(value=u256(r_amount))
+        # CEI: Interactions (Native Transfer). r_amount can round down to
+        # 0 for a dust-sized contribution against a much larger pool --
+        # that's a legitimate (if unlucky) outcome, not an error, so skip
+        # the transfer rather than reverting the whole claim.
+        if r_amount > 0:
+            _Recipient(Address(str(player))).emit_transfer(value=u256(r_amount))
 
     # =====================================================================
     # VIEW METHODS
