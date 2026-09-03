@@ -20,6 +20,7 @@ export interface MilestoneView {
   exists: boolean;
   index: number;
   title: string;
+  description?: string;
   ratioBps: number;
   status: MilestoneStatus | string;
   evidenceUrl: string;
