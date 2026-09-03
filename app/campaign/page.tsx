@@ -10,18 +10,23 @@ import {
   ScrollText,
   Loader2,
   CheckCircle2,
+  Timer,
+  Download
 } from 'lucide-react';
 import { useWallet } from '@/lib/useWallet';
 import { useToast } from '@/lib/useToast';
 import {
   getCampaign,
   getAllMilestones,
+  getPendingWithdrawal,
   fundCampaign,
   cancelCampaign,
   submitMilestone,
   adjudicateMilestone,
   claimRefund,
-  revokeFunding, 
+  revokeFunding,
+  triggerTimeout,
+  withdraw
 } from '@/lib/genlayerClient';
 import type { CampaignView, MilestoneView } from '@/lib/types';
 import { StatusBadge } from '@/components/StatusBadge';
@@ -31,19 +36,20 @@ import { FundModal } from '@/components/FundModal';
 import { WalletButton } from '@/components/WalletButton';
 import { formatTokenWithSymbol, fundingProgressPct, shortenAddress } from '@/lib/format';
 
-function CampaignDetail({ id }: { id: number }) {
+function CampaignDetail({ id }: { id: string }) {
   const { address } = useWallet();
   const { push } = useToast();
 
   const [campaign, setCampaign] = useState<CampaignView | null>(null);
   const [milestones, setMilestones] = useState<MilestoneView[]>([]);
+  const [pendingWithdrawal, setPendingWithdrawal] = useState<bigint>(0n);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showFundModal, setShowFundModal] = useState(false);
   const [claimed, setClaimed] = useState(false);
 
   const [busy, setBusy] = useState<
-    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke'
+    null | 'fund' | 'cancel' | 'submit' | 'adjudicate' | 'refund' | 'revoke' | 'timeout' | 'withdraw'
   >(null);
 
   const load = useCallback(async () => {
@@ -54,12 +60,15 @@ function CampaignDetail({ id }: { id: number }) {
       if (c.exists) {
         setMilestones(await getAllMilestones(c));
       }
+      if (address) {
+        setPendingWithdrawal(await getPendingWithdrawal(address));
+      }
     } catch (err: any) {
       setLoadError(err?.message ?? 'Failed to load this campaign.');
     } finally {
       setLoading(false);
     }
-  }, [id]);
+  }, [id, address]);
 
   useEffect(() => {
     load();
@@ -94,12 +103,12 @@ function CampaignDetail({ id }: { id: number }) {
     }
   }
 
-  async function handleSubmitEvidence(text: string) {
+  async function handleSubmitEvidence(url: string) {
     if (!address) return push('Connect your wallet first.', 'error');
     setBusy('submit');
     try {
-      await submitMilestone(address, id, text);
-      push('Evidence submitted for adjudication.', 'success');
+      await submitMilestone(address, id, url);
+      push('Evidence URL submitted for adjudication.', 'success');
       await load();
     } catch (err: any) {
       push(err?.message ?? 'Submission failed.', 'error');
@@ -128,7 +137,7 @@ function CampaignDetail({ id }: { id: number }) {
     try {
       await claimRefund(address, id);
       setClaimed(true);
-      push('Refund claimed — check your wallet balance.', 'success');
+      push('Refund moved to your pending withdrawals. Please withdraw to receive funds.', 'success');
       await load();
     } catch (err: any) {
       push(err?.message ?? 'Refund claim failed. You may not have a claimable contribution.', 'error');
@@ -142,10 +151,38 @@ function CampaignDetail({ id }: { id: number }) {
     setBusy('revoke');
     try {
       await revokeFunding(address, id);
-      push('Funding revoked — check your wallet balance.', 'success');
+      push('Funding revoked. Funds moved to pending withdrawals.', 'success');
       await load();
     } catch (err: any) {
       push(err?.message ?? 'Revoke failed. You may not have a claimable contribution.', 'error');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleTriggerTimeout() {
+    if (!address) return push('Connect your wallet first.', 'error');
+    setBusy('timeout');
+    try {
+      await triggerTimeout(address, id);
+      push('Campaign timed out successfully. Backers can now claim refunds.', 'success');
+      await load();
+    } catch (err: any) {
+      push(err?.message ?? 'Timeout trigger failed.', 'error');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function handleWithdraw() {
+    if (!address) return push('Connect your wallet first.', 'error');
+    setBusy('withdraw');
+    try {
+      await withdraw(address);
+      push('Funds withdrawn to your wallet.', 'success');
+      await load();
+    } catch (err: any) {
+      push(err?.message ?? 'Withdrawal failed.', 'error');
     } finally {
       setBusy(null);
     }
@@ -171,11 +208,8 @@ function CampaignDetail({ id }: { id: number }) {
     );
   }
 
-  // 1. Peak / Historical progress before cancellation or failure
   const peakFunded = campaign.totalFunded;
   const peakPct = fundingProgressPct(peakFunded, campaign.fundingGoal);
-
-  // 2. Current effective funded amount based on remaining escrow (updates with refunds)
   const currentEffectiveFunded = (campaign.status === 'CANCELLED' || campaign.status === 'FAILED')
     ? campaign.remainingFunds
     : campaign.totalFunded;
@@ -184,12 +218,28 @@ function CampaignDetail({ id }: { id: number }) {
 
   const isCreator = !!address && address.toLowerCase() === campaign.creator.toLowerCase();
   const canRefund = campaign.status === 'FAILED' || campaign.status === 'CANCELLED';
+  
+  const now = Math.floor(Date.now() / 1000);
+  const deadlinePassed = now > Number(campaign.deadline);
+  const canTimeout = (campaign.status === 'FUNDING' || campaign.status === 'ACTIVE') && deadlinePassed;
 
   return (
     <div className="space-y-8">
+      {pendingWithdrawal > 0n && (
+        <div className="flex flex-wrap items-center justify-between gap-4 rounded-md border border-brass-500/30 bg-brass-500/10 p-4">
+          <p className="text-sm text-brass-400">
+            You have <strong className="font-mono text-paper-100">{formatTokenWithSymbol(pendingWithdrawal)}</strong> pending to be withdrawn.
+          </p>
+          <button onClick={handleWithdraw} disabled={busy === 'withdraw'} className="btn-primary !bg-brass-500 !text-ink-950 hover:!bg-brass-400">
+            {busy === 'withdraw' ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            Withdraw Funds
+          </button>
+        </div>
+      )}
+
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="eyebrow mb-2">Case No. {String(campaign.campaignId).padStart(4, '0')}</p>
+          <p className="eyebrow mb-2">Case No. {campaign.campaignId}</p>
           <h1 className="font-display text-3xl italic text-paper-100">{campaign.title}</h1>
           <p className="mt-2 font-mono text-xs text-paper-400">
             Filed by {shortenAddress(campaign.creator)}
@@ -198,11 +248,7 @@ function CampaignDetail({ id }: { id: number }) {
         </div>
         <div className="flex items-center gap-2">
           <StatusBadge status={campaign.status} />
-          <button
-            onClick={load}
-            className="btn-secondary !px-2.5 !py-2"
-            title="Refresh from chain"
-          >
+          <button onClick={load} className="btn-secondary !px-2.5 !py-2" title="Refresh from chain">
             <RefreshCw size={14} />
           </button>
         </div>
@@ -221,13 +267,14 @@ function CampaignDetail({ id }: { id: number }) {
             )}
           </span>
         </div>
-        <div className="text-xs text-paper-400">
-          {formatTokenWithSymbol(campaign.remainingFunds)} held in escrow, unreleased
+        <div className="text-xs text-paper-400 flex justify-between">
+          <span>{formatTokenWithSymbol(campaign.remainingFunds)} held in escrow, unreleased</span>
+          <span>Deadline: {new Date(Number(campaign.deadline) * 1000).toLocaleDateString()}</span>
         </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {campaign.status === 'FUNDING' && (
+        {campaign.status === 'FUNDING' && !deadlinePassed && (
           <button onClick={() => setShowFundModal(true)} className="btn-primary">
             <Coins size={15} /> Fund this campaign
           </button>
@@ -246,6 +293,14 @@ function CampaignDetail({ id }: { id: number }) {
             Cancel campaign
           </button>
         )}
+
+        {canTimeout && (
+          <button onClick={handleTriggerTimeout} disabled={busy === 'timeout'} className="btn-danger">
+            {busy === 'timeout' ? <Loader2 size={14} className="animate-spin" /> : <Timer size={14} />}
+            Trigger Timeout (Deadline Passed)
+          </button>
+        )}
+
         {canRefund && (
           <button 
             onClick={handleClaimRefund} 
@@ -262,14 +317,6 @@ function CampaignDetail({ id }: { id: number }) {
           </span>
         )}
       </div>
-
-      {(canRefund || campaign.status === 'FUNDING') && (
-        <p className="rounded-md border border-ink-600 bg-ink-800/60 px-4 py-3 text-xs text-paper-400">
-          Refunds and revocations are safe. The contract does not expose a view method
-          for your exact contribution, so the amount isn&rsquo;t shown ahead of time — claiming is
-          safe even if you didn&rsquo;t contribute; it simply reverts.
-        </p>
-      )}
 
       <div className="space-y-3">
         <h2 className="eyebrow flex items-center gap-1.5">
@@ -306,10 +353,8 @@ function CampaignDetail({ id }: { id: number }) {
 function CampaignPageInner() {
   const params = useSearchParams();
   const idParam = params.get('id');
-  const id = Number(idParam);
-  const { address } = useWallet();
 
-  if (!idParam || !Number.isInteger(id) || id <= 0) {
+  if (!idParam) {
     return (
       <div className="ledger-card p-8 text-center">
         <p className="text-sm text-paper-300">
@@ -322,15 +367,7 @@ function CampaignPageInner() {
 
   return (
     <div className="space-y-6">
-      {!address && (
-        <div className="ledger-card flex flex-wrap items-center gap-3 p-4">
-          <p className="text-sm text-paper-300 flex-1">
-            Connect a wallet to fund, manage, or claim refunds on this campaign.
-          </p>
-          <WalletButton />
-        </div>
-      )}
-      <CampaignDetail id={id} />
+      <CampaignDetail id={idParam} />
     </div>
   );
 }
