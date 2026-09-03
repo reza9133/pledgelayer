@@ -3,7 +3,7 @@ import type { CampaignStatus, MilestoneStatus } from './contract';
 /** Mirrors the contract's CampaignView dataclass. */
 export interface CampaignView {
   exists: boolean;
-  campaignId: number;
+  campaignId: string;
   creator: string;
   title: string;
   fundingGoal: bigint;
@@ -12,6 +12,7 @@ export interface CampaignView {
   currentMilestoneIndex: number;
   milestoneCount: number;
   status: CampaignStatus | string;
+  deadline: bigint;
 }
 
 /** Mirrors the contract's MilestoneView dataclass. */
@@ -21,7 +22,7 @@ export interface MilestoneView {
   title: string;
   ratioBps: number;
   status: MilestoneStatus | string;
-  evidenceText: string;
+  evidenceUrl: string;
   rejectionCount: number;
   aiFeedback: string;
 }
