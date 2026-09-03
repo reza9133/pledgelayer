@@ -248,6 +248,7 @@ function CampaignDetail({ id }: { id: string }) {
         <div>
           <p className="eyebrow mb-2">Case No. {campaign.campaignId}</p>
           <h1 className="font-display text-3xl italic text-paper-100">{campaign.title}</h1>
+          <p className="mt-2 text-sm text-paper-300">{campaign.description}</p>
           <p className="mt-2 font-mono text-xs text-paper-400">
             Filed by {shortenAddress(campaign.creator)}
             {isCreator && <span className="ml-2 text-brass-400">(you)</span>}
