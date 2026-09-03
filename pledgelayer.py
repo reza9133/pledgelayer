@@ -4,12 +4,16 @@ PledgeLayer Platform - Complete Intelligent Contract
 ===================================================
 Implemented Pull-Payment pattern for native transfers, 
 str-keys for Calldata compatibility, secure LLM validator handling,
-CEI pattern, evidence web fetching, abandonment timeouts, campaign counting, and campaign description view.
+CEI pattern, evidence web fetching, evidence hash-binding (deterministic
+authentication of fetched evidence against a hash the creator commits at
+submission time, checked before any LLM judgment runs), abandonment
+timeouts, campaign counting, and campaign description view.
 """
 
 from genlayer import *
 from dataclasses import dataclass
 import json
+import hashlib
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
@@ -25,13 +29,35 @@ class _Recipient:
 # ---------------------------------------------------------------------------
 # 2. Top-Level Non-Deterministic AI Module (Consensus Wrapper)
 # ---------------------------------------------------------------------------
-def _evaluate_milestone_nondet(m_title: str, m_desc: str, evidence_url: str) -> dict:
+def _evaluate_milestone_nondet(m_title: str, m_desc: str, evidence_url: str, expected_hash: str) -> dict:
     def leader_fn():
         try:
             res = gl.nondet.web.get(evidence_url)
-            fetched_content = res.body.decode('utf-8')[:15000]
+            raw_bytes = res.body
+            fetched_content = raw_bytes.decode('utf-8')[:15000]
         except Exception as e:
-            fetched_content = f"Failed to fetch evidence URL: {str(e)}"
+            return {
+                "decision": "REJECTED",
+                "detailed_feedback": f"Failed to fetch evidence URL: {str(e)}"
+            }
+
+        # Bounded, deterministic authentication check: the creator commits a
+        # sha256 hash of the deliverable content at submission time
+        # (submit_milestone). Every validator independently re-fetches the
+        # evidence and must see content matching that committed hash before
+        # any subjective LLM judgment is allowed to run. This stops
+        # after-the-fact swaps of the evidence content and stops payouts
+        # from resting solely on unauthenticated creator-supplied text.
+        actual_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_hash != expected_hash:
+            return {
+                "decision": "REJECTED",
+                "detailed_feedback": (
+                    "Evidence content hash does not match the hash committed "
+                    "at submission time. The content at the evidence URL may "
+                    "have been altered after submission."
+                )
+            }
 
         prompt = f"""
         You are an elite, impartial Web3 Adjudicator.
@@ -98,6 +124,7 @@ class Milestone:
     ratio_bps: u32
     status: str
     evidence_url: str
+    evidence_hash: str
     rejection_count: u32
     ai_feedback: str
 
@@ -125,6 +152,7 @@ class MilestoneView:
     ratio_bps: u32
     status: str
     evidence_url: str
+    evidence_hash: str
     rejection_count: u32
     ai_feedback: str
 
@@ -205,7 +233,7 @@ class PledgeLayerPlatform(gl.Contract):
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=cid, index=u32(i), title=str(milestone_titles[i]),
                 description=str(milestone_descriptions[i]), ratio_bps=u32(milestone_ratios_bps[i]),
-                status="PENDING", evidence_url="", rejection_count=u32(0), ai_feedback=""
+                status="PENDING", evidence_url="", evidence_hash="", rejection_count=u32(0), ai_feedback=""
             )
             
         return cid
@@ -299,9 +327,10 @@ class PledgeLayerPlatform(gl.Contract):
         )
 
     @gl.public.write
-    def submit_milestone(self, campaign_id: str, evidence_url: str) -> None:
+    def submit_milestone(self, campaign_id: str, evidence_url: str, evidence_hash: str) -> None:
         cid = str(campaign_id)
         url = str(evidence_url)
+        ehash = str(evidence_hash).lower()
         c = self._get_campaign_or_raise(cid)
         
         if gl.message.sender_address != c.creator:
@@ -310,6 +339,11 @@ class PledgeLayerPlatform(gl.Contract):
             raise gl.vm.UserError("Campaign is not ACTIVE")
         if len(url) == 0 or not url.startswith("http"):
             raise gl.vm.UserError("Valid Evidence URL is required")
+        if len(ehash) != 64 or any(ch not in "0123456789abcdef" for ch in ehash):
+            raise gl.vm.UserError(
+                "evidence_hash must be the 64-char hex sha256 digest of the "
+                "deliverable content being linked to by evidence_url"
+            )
 
         m_key = f"{cid}_{int(c.current_milestone_index)}"
         m = self.campaign_milestones.get(m_key, None)
@@ -319,7 +353,7 @@ class PledgeLayerPlatform(gl.Contract):
 
         self.campaign_milestones[m_key] = Milestone(
             campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description,
-            ratio_bps=m.ratio_bps, status="SUBMITTED", evidence_url=url, 
+            ratio_bps=m.ratio_bps, status="SUBMITTED", evidence_url=url, evidence_hash=ehash,
             rejection_count=m.rejection_count, ai_feedback=m.ai_feedback
         )
 
@@ -337,7 +371,9 @@ class PledgeLayerPlatform(gl.Contract):
         if m is None or m.status != "SUBMITTED":
             raise gl.vm.UserError("Milestone not awaiting adjudication")
 
-        result = _evaluate_milestone_nondet(str(m.title), str(m.description), str(m.evidence_url))
+        result = _evaluate_milestone_nondet(
+            str(m.title), str(m.description), str(m.evidence_url), str(m.evidence_hash)
+        )
         decision = result.get("decision", "REJECTED")
         feedback = result.get("detailed_feedback", "No feedback provided")
 
@@ -358,7 +394,7 @@ class PledgeLayerPlatform(gl.Contract):
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description, 
                 ratio_bps=m.ratio_bps, status="APPROVED", evidence_url=m.evidence_url, 
-                rejection_count=m.rejection_count, ai_feedback=str(feedback)
+                evidence_hash=m.evidence_hash, rejection_count=m.rejection_count, ai_feedback=str(feedback)
             )
             
             self.campaigns[cid] = Campaign(
@@ -379,7 +415,7 @@ class PledgeLayerPlatform(gl.Contract):
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description, 
                 ratio_bps=m.ratio_bps, status="REJECTED", evidence_url=m.evidence_url, 
-                rejection_count=new_rejects, ai_feedback=str(feedback)
+                evidence_hash=m.evidence_hash, rejection_count=new_rejects, ai_feedback=str(feedback)
             )
             
             self.campaigns[cid] = Campaign(
@@ -464,15 +500,15 @@ class PledgeLayerPlatform(gl.Contract):
             m_key = f"{str(campaign_id)}_{int(u32(milestone_index))}"
             m = self.campaign_milestones.get(m_key, None)
             if m is None:
-                return MilestoneView(False, u32(0), "", "", u32(0), "", "", u32(0), "")
+                return MilestoneView(False, u32(0), "", "", u32(0), "", "", "", u32(0), "")
                 
             return MilestoneView(
                 exists=True, index=m.index, title=m.title, description=m.description, ratio_bps=m.ratio_bps,
-                status=m.status, evidence_url=m.evidence_url, 
+                status=m.status, evidence_url=m.evidence_url, evidence_hash=m.evidence_hash,
                 rejection_count=m.rejection_count, ai_feedback=m.ai_feedback
             )
         except Exception:
-            return MilestoneView(False, u32(0), "", "", u32(0), "", "", u32(0), "")
+            return MilestoneView(False, u32(0), "", "", u32(0), "", "", "", u32(0), "")
             
     @gl.public.view
     def get_pending_withdrawal(self, account: str) -> u256:
