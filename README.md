@@ -151,7 +151,7 @@ pledgelayer/
 
 ## 🔐 Contract reference
 
-- **Address (default):** `0x125d81a2D2cd095e9De960895e81b36291E6f6F1` — overridable via `NEXT_PUBLIC_CONTRACT_ADDRESS`
+- **Address (default):** `0x5380808A1e42dA82F6Aeadcc3035EF8e64dbb797` — overridable via `NEXT_PUBLIC_CONTRACT_ADDRESS`
 - **Network:** GenLayer Bradbury Testnet (`testnetBradbury` in `genlayer-js/chains`)
 - **Platform fee:** 250 bps (2.5%) deducted from every milestone payout
 
