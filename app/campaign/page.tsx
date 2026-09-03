@@ -19,6 +19,7 @@ import {
   getCampaign,
   getAllMilestones,
   getPendingWithdrawal,
+  getContribution,
   fundCampaign,
   cancelCampaign,
   submitMilestone,
@@ -43,6 +44,7 @@ function CampaignDetail({ id }: { id: string }) {
   const [campaign, setCampaign] = useState<CampaignView | null>(null);
   const [milestones, setMilestones] = useState<MilestoneView[]>([]);
   const [pendingWithdrawal, setPendingWithdrawal] = useState<bigint>(0n);
+  const [myContribution, setMyContribution] = useState<bigint>(0n);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [showFundModal, setShowFundModal] = useState(false);
@@ -62,6 +64,7 @@ function CampaignDetail({ id }: { id: string }) {
       }
       if (address) {
         setPendingWithdrawal(await getPendingWithdrawal(address));
+        setMyContribution(await getContribution(id, address));
       }
     } catch (err: any) {
       setLoadError(err?.message ?? 'Failed to load this campaign.');
@@ -302,14 +305,19 @@ function CampaignDetail({ id }: { id: string }) {
         )}
 
         {canRefund && (
-          <button 
-            onClick={handleClaimRefund} 
-            disabled={busy === 'refund' || claimed} 
-            className="btn-primary"
-          >
-            {busy === 'refund' ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
-            {claimed ? 'Refund claimed' : 'Claim refund'}
-          </button>
+          <div className="flex flex-col gap-2 rounded-md border border-verdict-reject/30 bg-verdict-rejectDim/20 p-4 w-full sm:w-auto">
+            <p className="text-xs font-mono text-paper-300">
+              Your contribution: <strong className="font-mono text-paper-100">{formatTokenWithSymbol(myContribution)}</strong>
+            </p>
+            <button 
+              onClick={handleClaimRefund} 
+              disabled={busy === 'refund' || claimed || myContribution === 0n} 
+              className="btn-primary"
+            >
+              {busy === 'refund' ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
+              {claimed ? 'Refund claimed' : `Claim refund (${formatTokenWithSymbol(myContribution)})`}
+            </button>
+          </div>
         )}
         {campaign.status === 'COMPLETED' && (
           <span className="flex items-center gap-2 rounded-md border border-verdict-approve/30 bg-verdict-approveDim px-4 py-2.5 text-sm text-verdict-approve">
