@@ -1,9 +1,15 @@
 import pytest
 import json
+import hashlib
 from unittest.mock import patch
 from genlayer import *
 
 from pledgelayer import PledgeLayerPlatform, _Recipient
+
+
+def _h(content: str) -> str:
+    """sha256 hex digest of the evidence body a test's mock_web will return."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def _fund(direct_vm, contract, cid, backer, amount):
@@ -62,9 +68,10 @@ def test_payout_and_surplus(direct_vm, direct_deploy, direct_alice, direct_bob, 
     _fund(direct_vm, contract, cid, direct_bob, 15 * 10**18)
     assert contract.get_contribution(cid, str(direct_bob)) == 15 * 10**18
 
-    # 3. Submit Evidence URL
+    # 3. Submit Evidence URL, committing the sha256 hash of the deliverable
+    # content ahead of time so validators can authenticate it at adjudication.
     direct_vm.sender = direct_alice
-    contract.submit_milestone(cid, "https://github.com/my-repo/pull/1")
+    contract.submit_milestone(cid, "https://github.com/my-repo/pull/1", _h("Merge branch main"))
 
     # 4. Mock Web Fetching & AI Adjudication & Approve
     direct_vm.mock_web(r".*", {"status": 200, "body": "Merge branch main"})
@@ -196,7 +203,7 @@ def test_failed_campaign_partial_payout_refund(
 
     # Milestone 1 (30% of 10 tokens = 3) is submitted, web-fetched, and approved.
     direct_vm.sender = direct_alice
-    contract.submit_milestone(cid, "https://example.com/evidence1")
+    contract.submit_milestone(cid, "https://example.com/evidence1", _h("Evidence 1"))
     direct_vm.mock_web(r".*", {"status": 200, "body": "Evidence 1"})
     direct_vm.mock_llm(r".*", json.dumps({"decision": "APPROVED", "detailed_feedback": "Solid"}))
     direct_vm.sender = direct_charlie
@@ -220,13 +227,13 @@ def test_failed_campaign_partial_payout_refund(
     direct_vm.mock_llm(r".*", json.dumps({"decision": "REJECTED", "detailed_feedback": "Not enough evidence"}))
 
     direct_vm.sender = direct_alice
-    contract.submit_milestone(cid, "https://example.com/evidence2-v1")
+    contract.submit_milestone(cid, "https://example.com/evidence2-v1", _h("Evidence 2"))
     direct_vm.sender = direct_charlie
     contract.adjudicate_milestone(cid)
     assert contract.get_campaign(cid).status == "ACTIVE", "First rejection should not fail the campaign yet"
 
     direct_vm.sender = direct_alice
-    contract.submit_milestone(cid, "https://example.com/evidence2-v2")
+    contract.submit_milestone(cid, "https://example.com/evidence2-v2", _h("Evidence 2"))
     direct_vm.sender = direct_charlie
     contract.adjudicate_milestone(cid)
 
@@ -262,6 +269,58 @@ def test_failed_campaign_partial_payout_refund(
     eve_key = f"{cid}_{str(eve)}"
     assert contract.campaign_contributions[bob_key] == 0
     assert contract.campaign_contributions[eve_key] == 0
+
+
+def test_submit_milestone_rejects_bad_hash_format(direct_vm, direct_deploy, direct_alice, direct_bob):
+    """Proves the contract enforces a well-formed 64-char hex sha256 commitment
+    at submission time instead of accepting arbitrary/missing hashes."""
+
+    contract = direct_deploy("pledgelayer.py", sdk_version="v0.2.12")
+
+    direct_vm.sender = direct_alice
+    cid = contract.create_campaign("Hash Format", "Desc", 10, 30, ["M1"], ["Desc"], [10000])
+    _fund(direct_vm, contract, cid, direct_bob, 10 * 10**18)
+
+    direct_vm.sender = direct_alice
+    with pytest.raises(Exception):
+        contract.submit_milestone(cid, "https://example.com/e", "not-a-valid-hash")
+
+
+def test_evidence_hash_mismatch_forces_rejection(
+    direct_vm, direct_deploy, direct_alice, direct_bob, direct_charlie
+):
+    """Proves evidence content is authenticated against the hash committed at
+    submission time: if the content behind evidence_url no longer matches
+    that commitment (e.g. swapped after submission), adjudication is forced
+    to REJECTED deterministically -- even though the mocked LLM would have
+    APPROVED it. This closes the gap where irreversible payouts rested on
+    unauthenticated creator-supplied text."""
+
+    contract = direct_deploy("pledgelayer.py", sdk_version="v0.2.12")
+
+    direct_vm.sender = direct_alice
+    cid = contract.create_campaign("Hash Mismatch", "Desc", 10, 30, ["M1"], ["Desc"], [10000])
+    _fund(direct_vm, contract, cid, direct_bob, 10 * 10**18)
+
+    # Alice commits to the hash of "Original Deliverable" ...
+    direct_vm.sender = direct_alice
+    contract.submit_milestone(cid, "https://example.com/e", _h("Original Deliverable"))
+
+    # ... but by adjudication time the URL actually serves different content,
+    # and the LLM mock would happily approve it.
+    direct_vm.mock_web(r".*", {"status": 200, "body": "Swapped Deliverable"})
+    direct_vm.mock_llm(r".*", json.dumps({"decision": "APPROVED", "detailed_feedback": "Looks great"}))
+
+    direct_vm.sender = direct_charlie
+    contract.adjudicate_milestone(cid)
+
+    m = contract.get_milestone(cid, u32(0))
+    assert m.status == "REJECTED"
+    assert "hash" in m.ai_feedback.lower()
+
+    c = contract.get_campaign(cid)
+    assert c.status == "ACTIVE", "A single hash-mismatch rejection should not fail the campaign outright"
+    assert int(c.remaining_funds) == 10 * 10**18, "No funds may move on a hash-authentication failure"
 
 
 def test_abandonment_timeout(direct_vm, direct_deploy, direct_alice, direct_bob):
