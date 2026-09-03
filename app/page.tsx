@@ -31,7 +31,6 @@ export default function DashboardPage() {
   function handleJump(e: React.FormEvent) {
     e.preventDefault();
     const id = jumpId.trim();
-    // اینجا فقط چک می‌کنیم که استرینگ خالی نباشد
     if (id) router.push(`/campaign?id=${id}`);
   }
 
