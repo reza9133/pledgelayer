@@ -19,7 +19,7 @@ Every milestone is judged by an **AI adjudicator**, under validator consensus �
 
 Classic crowdfunding platforms share the same structural flaw: once the money is raised, **who actually verifies the creator delivered?** Usually it's either the creator's own word, or a centralized team that isn't much more trustworthy.
 
-**PledgeLayer** breaks that loop. Funds sit escrowed in a smart contract, and each **milestone** is released only after an **LLM-backed Intelligent Contract** — running on [GenLayer](https://genlayer.com) / GenVM — evaluates the creator's submitted evidence, with independent validators voting to reach consensus rather than a single API call deciding unilaterally.
+**PledgeLayer** breaks that loop. Funds sit escrowed in a smart contract, and each **milestone** is released only after an **LLM-backed Intelligent Contract** — running on [GenLayer](https://genlayer.com) / GenVM — evaluates the creator's submitted evidence, with independent validators voting to reach consensus rather than a single API call deciding unilaterally. The evidence itself is authenticated on-chain: the creator commits a sha256 hash of the deliverable at submission time, and every validator re-fetches the evidence URL and checks it against that hash before any LLM judgment runs, so a payout can never rest on content that was swapped in after submission.
 
 This repo contains two halves:
 
@@ -33,6 +33,8 @@ This repo contains two halves:
 ## ✨ What makes PledgeLayer different
 
 - **Adjudication without a stake in the outcome** — each milestone's evidence is scored against an impartial adjudication prompt, and the verdict must match across the leader and validator nodes (non-deterministic consensus), not just come from one model call.
+- **Evidence is authenticated, not just trusted** — `submit_milestone` requires a sha256 hash commitment alongside the evidence URL. At adjudication, every validator independently re-fetches the URL and rejects deterministically if the fetched content's hash no longer matches what was committed — before the LLM ever sees it.
+- **Abandonment has an exit** — if a campaign stalls past its funding deadline without completing (creator disappears, milestone never submitted), anyone — including a backer — can call `trigger_timeout` to force the campaign to `FAILED`, unlocking `claim_refund` for everyone who backed it.
 - **No stranded funds** — if a campaign is overfunded, the final milestone sweeps the *entire* remaining escrow (not just its nominal share), so no token is ever left locked in the contract.
 - **Overfunding-aware payouts** — each milestone's share is computed against `total_funded`, not just `funding_goal`, so surplus contributions get distributed proportionally too.
 - **CEI pattern everywhere** — every value transfer (creator payout, platform fee, refund) happens after state is updated, guarding against reentrancy.
@@ -69,9 +71,14 @@ sequenceDiagram
     participant AI as AI Adjudicator (validator consensus)
     participant B as Backer
 
-    C->>K: submit_milestone(evidence_text)
-    K->>AI: evaluate evidence against milestone title/description
-    AI-->>K: APPROVED or REJECTED (must match across validators)
+    C->>K: submit_milestone(evidence_url, evidence_hash)
+    K->>AI: fetch evidence_url, verify hash matches evidence_hash
+    alt Hash mismatch
+        AI-->>K: REJECTED (deterministic, no LLM call)
+    else Hash matches
+        K->>AI: evaluate evidence against milestone title/description
+        AI-->>K: APPROVED or REJECTED (must match across validators)
+    end
     alt Approved
         K->>C: pay out milestone share (ratio_bps of total_funded)
         K->>K: deduct platform fee (2.5%)
@@ -163,7 +170,7 @@ pledgelayer/
 | `fund_campaign` *(payable)* | Deposit into a campaign; status flips to `ACTIVE` once the goal is met |
 | `revoke_funding` | Lets a backer withdraw from a campaign still stuck in `FUNDING` |
 | `cancel_campaign` | Creator cancels a campaign, only allowed during `FUNDING` |
-| `submit_milestone` | Submit evidence text for the current milestone |
+| `submit_milestone` | Submit an evidence URL for the current milestone, plus a sha256 hash commitment of the deliverable content (validators re-fetch and verify this hash before adjudicating) |
 | `adjudicate_milestone` | Triggers AI adjudication on submitted evidence |
 | `claim_refund` | Claim a proportional share of remaining escrow on a `FAILED`/`CANCELLED` campaign |
 | `trigger_timeout` | Marks a `FUNDING`/`ACTIVE` campaign `FAILED` once its deadline has passed |
@@ -224,6 +231,7 @@ This app builds to a fully static site (`output: 'export'` in `next.config.js`) 
 GenLayer Intelligent Contracts are Python classes running on GenVM, not standard EVM/Solidity contracts — that's why the frontend uses `genlayer-js`, not raw `ethers`/`viem`. A few things worth knowing before treating this as final:
 
 1. **`get_campaign` / `get_milestone` field shapes aren't verified against a live chain.** `lib/genlayerClient.ts` runs every response through a generic `toCamelCase()` converter (snake_case → camelCase), but before you trust it in production, run a real `readContract` call against Bradbury and confirm the wire shape actually matches `CampaignView`/`MilestoneView` in `lib/types.ts`.
+2. **The evidence hash is entered manually, not computed in-browser.** The creator has to hash the deliverable themselves (e.g. `sha256sum file`) and paste the digest into the "Committed hash" field in `MilestoneItem.tsx`. The UI only validates the format (64 hex chars), not that the hash actually matches what's at the URL — a wrong hash just gets rejected at adjudication time, it isn't caught earlier. Auto-fetching and hashing the URL client-side would remove this footgun but runs into CORS on most evidence hosts, so it was left as a manual step.
 
 None of this blocks using the app as-is (everything degrades gracefully), but decide whether to patch the contract or live with these workarounds before going further.
 
