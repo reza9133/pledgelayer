@@ -7,13 +7,14 @@ import { NATIVE_SYMBOL } from '@/lib/contract';
 export interface MilestoneDraft {
   title: string;
   description: string;
-  percent: string; // human-entered percent, converted to bps on submit
+  percent: string; 
 }
 
 export interface CampaignDraft {
   title: string;
   description: string;
   fundingGoal: string;
+  durationDays: string;
   milestones: MilestoneDraft[];
 }
 
@@ -29,6 +30,7 @@ export function CreateCampaignForm({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [fundingGoal, setFundingGoal] = useState('');
+  const [durationDays, setDurationDays] = useState('30');
   const [milestones, setMilestones] = useState<MilestoneDraft[]>([emptyMilestone(), emptyMilestone()]);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -57,6 +59,9 @@ export function CreateCampaignForm({
     if (!Number.isInteger(Number(fundingGoal)) || Number(fundingGoal) <= 0) {
       return setFormError(`Enter a whole-number funding goal in ${NATIVE_SYMBOL}.`);
     }
+    if (!Number.isInteger(Number(durationDays)) || Number(durationDays) <= 0) {
+      return setFormError('Enter a valid duration in days.');
+    }
     if (milestones.some((m) => !m.title.trim() || !m.description.trim())) {
       return setFormError('Every milestone needs a title and description.');
     }
@@ -67,7 +72,7 @@ export function CreateCampaignForm({
       return setFormError(`Milestone percentages must add up to exactly 100% (currently ${percentTotal}%).`);
     }
 
-    onSubmit({ title, description, fundingGoal, milestones });
+    onSubmit({ title, description, fundingGoal, durationDays, milestones });
   }
 
   return (
@@ -99,18 +104,33 @@ export function CreateCampaignForm({
             className="field-input resize-y"
           />
         </div>
-        <div>
-          <label className="field-label" htmlFor="c-goal">
-            Funding goal ({NATIVE_SYMBOL}, whole number)
-          </label>
-          <input
-            id="c-goal"
-            inputMode="numeric"
-            value={fundingGoal}
-            onChange={(e) => setFundingGoal(e.target.value)}
-            placeholder="1000"
-            className="field-input font-mono"
-          />
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="field-label" htmlFor="c-goal">
+              Funding goal ({NATIVE_SYMBOL})
+            </label>
+            <input
+              id="c-goal"
+              inputMode="numeric"
+              value={fundingGoal}
+              onChange={(e) => setFundingGoal(e.target.value)}
+              placeholder="1000"
+              className="field-input font-mono"
+            />
+          </div>
+          <div>
+            <label className="field-label" htmlFor="c-duration">
+              Duration (Days)
+            </label>
+            <input
+              id="c-duration"
+              inputMode="numeric"
+              value={durationDays}
+              onChange={(e) => setDurationDays(e.target.value)}
+              placeholder="30"
+              className="field-input font-mono"
+            />
+          </div>
         </div>
       </section>
 
