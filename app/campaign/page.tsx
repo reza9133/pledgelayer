@@ -222,6 +222,10 @@ function CampaignDetail({ id }: { id: string }) {
   const isCreator = !!address && address.toLowerCase() === campaign.creator.toLowerCase();
   const canRefund = campaign.status === 'FAILED' || campaign.status === 'CANCELLED';
   
+  const previewRefund = (campaign.totalFunded > 0n && campaign.remainingFunds > 0n && myContribution > 0n)
+    ? (myContribution * campaign.remainingFunds) / campaign.totalFunded
+    : 0n;
+
   const now = Math.floor(Date.now() / 1000);
   const deadlinePassed = now > Number(campaign.deadline);
   const canTimeout = (campaign.status === 'FUNDING' || campaign.status === 'ACTIVE') && deadlinePassed;
@@ -307,15 +311,15 @@ function CampaignDetail({ id }: { id: string }) {
         {canRefund && (
           <div className="flex flex-col gap-2 rounded-md border border-verdict-reject/30 bg-verdict-rejectDim/20 p-4 w-full sm:w-auto">
             <p className="text-xs font-mono text-paper-300">
-              Your contribution: <strong className="font-mono text-paper-100">{formatTokenWithSymbol(myContribution)}</strong>
+              Your claimable refund: <strong className="font-mono text-paper-100">{formatTokenWithSymbol(previewRefund)}</strong>
             </p>
             <button 
               onClick={handleClaimRefund} 
-              disabled={busy === 'refund' || claimed || myContribution === 0n} 
+              disabled={busy === 'refund' || claimed || previewRefund === 0n} 
               className="btn-primary"
             >
               {busy === 'refund' ? <Loader2 size={14} className="animate-spin" /> : <Undo2 size={14} />}
-              {claimed ? 'Refund claimed' : `Claim refund (${formatTokenWithSymbol(myContribution)})`}
+              {claimed ? 'Refund claimed' : `Claim refund (${formatTokenWithSymbol(previewRefund)})`}
             </button>
           </div>
         )}
