@@ -1,15 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Clock, Upload, Gavel, Loader2, Link as LinkIcon } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, Upload, Gavel, Loader2, Link as LinkIcon, Hash } from 'lucide-react';
 import type { MilestoneView } from '@/lib/types';
+
+const SHA256_HEX = /^[0-9a-f]{64}$/i;
 
 interface Props {
   milestone: MilestoneView;
   order: number;
   isCurrent: boolean;
   canManage: boolean;
-  onSubmitEvidence: (url: string) => void;
+  onSubmitEvidence: (url: string, evidenceHash: string) => void;
   onAdjudicate: () => void;
   submitting: boolean;
   adjudicating: boolean;
@@ -26,11 +28,15 @@ export function MilestoneItem({
   adjudicating,
 }: Props) {
   const [evidenceUrl, setEvidenceUrl] = useState('');
+  const [evidenceHash, setEvidenceHash] = useState('');
 
   const isPending = milestone.status === 'PENDING';
   const isSubmitted = milestone.status === 'SUBMITTED';
   const isApproved = milestone.status === 'APPROVED';
   const isRejected = milestone.status === 'REJECTED';
+
+  const isHashValid = SHA256_HEX.test(evidenceHash.trim());
+  const canSubmit = evidenceUrl.startsWith('http') && isHashValid;
 
   const pct = (milestone.ratioBps / 100).toFixed(1);
 
@@ -86,25 +92,51 @@ export function MilestoneItem({
                 className="input-field pl-9"
               />
             </div>
+          </div>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <Hash size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-paper-500" />
+              <input
+                type="text"
+                placeholder="sha256 hash of the deliverable content (64 hex chars)"
+                value={evidenceHash}
+                onChange={(e) => setEvidenceHash(e.target.value)}
+                className={`input-field pl-9 font-mono ${
+                  evidenceHash.length > 0 && !isHashValid ? 'border-verdict-reject/50' : ''
+                }`}
+              />
+            </div>
             <button
-              onClick={() => onSubmitEvidence(evidenceUrl)}
-              disabled={submitting || !evidenceUrl.startsWith('http')}
+              onClick={() => onSubmitEvidence(evidenceUrl, evidenceHash.trim().toLowerCase())}
+              disabled={submitting || !canSubmit}
               className="btn-primary whitespace-nowrap"
             >
               {submitting ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-              Submit URL
+              Submit
             </button>
           </div>
+          <p className="text-xs text-paper-500">
+            Paste the sha256 digest of the exact content living at the evidence URL
+            (e.g. run <code className="text-paper-400">sha256sum</code> on the file). Validators
+            re-fetch the URL at adjudication time and reject automatically if the content no
+            longer matches this hash.
+          </p>
         </div>
       )}
 
       {isSubmitted && (
         <div className="border-t border-ink-700 pt-4 space-y-3">
-          <div className="rounded-md bg-ink-900/50 p-3 font-mono text-xs text-paper-300">
-            <span className="text-paper-500">Submitted URL: </span>
-            <a href={milestone.evidenceUrl} target="_blank" rel="noreferrer" className="text-brass-400 hover:underline">
-              {milestone.evidenceUrl}
-            </a>
+          <div className="rounded-md bg-ink-900/50 p-3 font-mono text-xs text-paper-300 space-y-1">
+            <div>
+              <span className="text-paper-500">Submitted URL: </span>
+              <a href={milestone.evidenceUrl} target="_blank" rel="noreferrer" className="text-brass-400 hover:underline">
+                {milestone.evidenceUrl}
+              </a>
+            </div>
+            <div className="break-all">
+              <span className="text-paper-500">Committed hash: </span>
+              {milestone.evidenceHash}
+            </div>
           </div>
           <button
             onClick={onAdjudicate}
