@@ -131,7 +131,7 @@ pledgelayer/
 ├── components/
 │   ├── Navbar.tsx, WalletButton.tsx, Toast.tsx
 │   ├── CampaignCard.tsx, StatusBadge.tsx, ProgressBar.tsx, EmptyState.tsx
-│   ├── FundModal.tsx, CreateCampaignForm.tsx
+│   ├── FundModal.tsx
 │   ├── MilestoneItem.tsx      Evidence submission + adjudication trigger
 │   └── VerdictStamp.tsx       Rubber-stamp APPROVED/REJECTED verdict badge
 ├── lib/
@@ -166,10 +166,12 @@ pledgelayer/
 | `submit_milestone` | Submit evidence text for the current milestone |
 | `adjudicate_milestone` | Triggers AI adjudication on submitted evidence |
 | `claim_refund` | Claim a proportional share of remaining escrow on a `FAILED`/`CANCELLED` campaign |
+| `trigger_timeout` | Marks a `FUNDING`/`ACTIVE` campaign `FAILED` once its deadline has passed |
+| `withdraw` | Pulls any pending balance (creator payouts, platform fee, refunds) owed to the caller |
 
-**View methods:** `get_campaign`, `get_milestone`
+**View methods:** `get_campaign`, `get_milestone`, `get_pending_withdrawal`, `get_campaign_count`, `get_contribution`
 
-> ℹ️ Note: `revoke_funding` is actively used by the frontend (`lib/genlayerClient.ts`, `app/campaign/page.tsx`) but was missing from the write-methods list in the previous version of this doc — added above.
+> ℹ️ Note: `revoke_funding`, `trigger_timeout`, and `withdraw` are actively used by the frontend (`lib/genlayerClient.ts`, `app/campaign/page.tsx`) but were missing from the write-methods list in an earlier version of this doc — added above.
 
 ---
 
@@ -222,11 +224,8 @@ This app builds to a fully static site (`output: 'export'` in `next.config.js`) 
 GenLayer Intelligent Contracts are Python classes running on GenVM, not standard EVM/Solidity contracts — that's why the frontend uses `genlayer-js`, not raw `ethers`/`viem`. A few things worth knowing before treating this as final:
 
 1. **`get_campaign` / `get_milestone` field shapes aren't verified against a live chain.** `lib/genlayerClient.ts` runs every response through a generic `toCamelCase()` converter (snake_case → camelCase), but before you trust it in production, run a real `readContract` call against Bradbury and confirm the wire shape actually matches `CampaignView`/`MilestoneView` in `lib/types.ts`.
-2. **The contract has no way to list campaigns.** There's no `get_campaign_count()` exposed as a view — the frontend probes `get_campaign(1)`, `get_campaign(2)`, ... until it hits two consecutive non-existent IDs (`listCampaigns` in `lib/genlayerClient.ts`). This works because campaign IDs are sequential, but it doesn't scale. Recommended fix: add a `get_campaign_count` view method to the contract.
-3. **There's no way to preview a refund amount.** `campaign_contributions` has no public getter, so the Refund panel can't show the exact payout before the transaction. Recommended fix: add a view method like `get_contribution`.
-4. **`CampaignView` has no `description` field**, so the campaign detail page only shows the title, not the description passed into `create_campaign`.
-5. **`MilestoneView` has no `description` field either**, but `components/MilestoneItem.tsx` renders `milestone.description` anyway — since the contract's `get_milestone` never returns it, that line is always blank in production. Either drop it from `MilestoneItem.tsx` or add `description` to the contract's `MilestoneView` dataclass and thread it through.
-6. **`components/CreateCampaignForm.tsx` is unused.** The actual create-campaign UI is inlined directly in `app/create/page.tsx`; `CreateCampaignForm.tsx` is a separate, not-imported implementation of the same form and has drifted from it (e.g. it collects payout as a "percent" of 100 instead of the page's basis-points model). Treat it as dead code — remove it or wire it in and delete the duplicate logic from `app/create/page.tsx`.
+2. **Refund amounts still aren't previewed in the UI.** The contract now exposes `get_contribution` and `lib/genlayerClient.ts` has a matching `getContribution()` wrapper, but nothing in `app/campaign/page.tsx` calls it yet — the Refund panel still doesn't show the exact payout before the transaction. Wire `getContribution()` into the refund UI to finish this.
+3. **`CampaignView` has no `description` field**, so the campaign detail page only shows the title, not the description passed into `create_campaign`.
 
 None of this blocks using the app as-is (everything degrades gracefully), but decide whether to patch the contract or live with these workarounds before going further.
 
@@ -234,7 +233,7 @@ None of this blocks using the app as-is (everything degrades gracefully), but de
 
 ## 🗺️ Ideas for future work
 
-- Add `get_campaign_count` and `get_contribution` to the contract for listing and refund previews without polling
+- Wire the existing `getContribution()` client helper into the Refund panel so backers see the exact payout before claiming
 - Surface the campaign `description` on the detail page (requires adding the field to `CampaignView`)
 - Index events/transaction history per campaign instead of only reading current state
 - Add more test coverage for repeated-rejection, cancellation, and `revoke_funding` paths
