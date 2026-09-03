@@ -81,6 +81,16 @@ export async function getCampaignCount(): Promise<number> {
   return Number(res || 0);
 }
 
+export async function getContribution(campaignId: string, accountAddress: string): Promise<bigint> {
+  const client = getClient();
+  const res: any = await client.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'get_contribution',
+    args: [campaignId, accountAddress],
+  });
+  return BigInt(res || 0);
+}
+
 export async function withdraw(accountAddress: string) {
   const client = getClient(accountAddress);
   const hash = await client.writeContract({
