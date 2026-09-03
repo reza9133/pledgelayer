@@ -1,5 +1,6 @@
 import { createClient } from 'genlayer-js';
 import { testnetBradbury } from 'genlayer-js/chains';
+import { TransactionStatus } from 'genlayer-js/types';
 import { CONTRACT_ADDRESS } from './contract';
 import type { CampaignView, MilestoneView } from './types';
 
@@ -78,7 +79,7 @@ export async function withdraw(accountAddress: string) {
     args: [],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function triggerTimeout(accountAddress: string, campaignId: string) {
@@ -89,7 +90,7 @@ export async function triggerTimeout(accountAddress: string, campaignId: string)
     args: [campaignId],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function createCampaign(
@@ -117,7 +118,7 @@ export async function createCampaign(
     ],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function fundCampaign(accountAddress: string, campaignId: string, amount: bigint) {
@@ -128,7 +129,7 @@ export async function fundCampaign(accountAddress: string, campaignId: string, a
     args: [campaignId],
     value: amount,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function revokeFunding(accountAddress: string, campaignId: string) {
@@ -139,7 +140,7 @@ export async function revokeFunding(accountAddress: string, campaignId: string) 
     args: [campaignId],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function cancelCampaign(accountAddress: string, campaignId: string) {
@@ -150,7 +151,7 @@ export async function cancelCampaign(accountAddress: string, campaignId: string)
     args: [campaignId],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function claimRefund(accountAddress: string, campaignId: string) {
@@ -161,7 +162,7 @@ export async function claimRefund(accountAddress: string, campaignId: string) {
     args: [campaignId],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function submitMilestone(accountAddress: string, campaignId: string, evidenceUrl: string) {
@@ -172,7 +173,7 @@ export async function submitMilestone(accountAddress: string, campaignId: string
     args: [campaignId, evidenceUrl],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function adjudicateMilestone(accountAddress: string, campaignId: string) {
@@ -183,7 +184,7 @@ export async function adjudicateMilestone(accountAddress: string, campaignId: st
     args: [campaignId],
     value: 0n,
   });
-  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+  return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
 export async function listCampaigns(): Promise<CampaignView[]> {
