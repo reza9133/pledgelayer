@@ -30,8 +30,9 @@ export default function DashboardPage() {
 
   function handleJump(e: React.FormEvent) {
     e.preventDefault();
-    const id = Number(jumpId);
-    if (Number.isInteger(id) && id > 0) router.push(`/campaign?id=${id}`);
+    const id = jumpId.trim();
+    // اینجا فقط چک می‌کنیم که استرینگ خالی نباشد
+    if (id) router.push(`/campaign?id=${id}`);
   }
 
   return (
@@ -56,7 +57,7 @@ export default function DashboardPage() {
               value={jumpId}
               onChange={(e) => setJumpId(e.target.value)}
               placeholder="Jump to case No."
-              inputMode="numeric"
+              inputMode="text"
               className="field-input w-48 pl-8 font-mono"
             />
           </div>
