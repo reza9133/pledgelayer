@@ -1,241 +1,180 @@
 import { createClient } from 'genlayer-js';
 import { testnetBradbury } from 'genlayer-js/chains';
-import { TransactionStatus, ExecutionResult, type CalldataEncodable } from 'genlayer-js/types';
 import { CONTRACT_ADDRESS } from './contract';
 import type { CampaignView, MilestoneView } from './types';
-import { toBigInt, toNumber } from './format';
 
-let activeProvider: any = null;
-
-export function setActiveProvider(provider: any) {
-  activeProvider = provider;
+function toCamelCase(obj: any): any {
+  if (Array.isArray(obj)) {
+    return obj.map((v) => toCamelCase(v));
+  } else if (obj !== null && obj.constructor === Object) {
+    return Object.keys(obj).reduce((result, key) => {
+      const camelKey = key.replace(/([-_][a-z])/g, (group) =>
+        group.toUpperCase().replace('-', '').replace('_', '')
+      );
+      result[camelKey] = toCamelCase(obj[key]);
+      return result;
+    }, {} as any);
+  }
+  return obj;
 }
 
-/**
- * Read-only client. Talks directly to the GenLayer RPC — no wallet needed.
- * Safe to use on the server or before a wallet is connected.
- */
-export const readClient = createClient({
-  chain: testnetBradbury,
-});
-
-/**
- * Creates a write client bound to a connected wallet so
- * transactions are signed by the user rather than a local key.
- */
-export function getWriteClient(address: `0x${string}`) {
-  if (!activeProvider) {
-    throw new Error('No wallet provider found. Please connect your wallet first.');
-  }
+export function getClient(accountAddress?: string) {
   return createClient({
     chain: testnetBradbury,
-    account: address,
-    provider: activeProvider,
+    account: accountAddress ? (accountAddress as `0x${string}`) : undefined,
   });
 }
 
-/** Prompts the connected wallet to switch to / add the Bradbury testnet. */
-export async function ensureCorrectNetwork(address: `0x${string}`) {
-  const client = getWriteClient(address);
-  
-  if (!activeProvider) return client;
-
-  const chainIdHex = `0x${testnetBradbury.id.toString(16)}`;
-
-  try {
-    await activeProvider.request({
-      method: 'wallet_switchEthereumChain',
-      params: [{ chainId: chainIdHex }],
-    });
-  } catch (switchError: any) {
-    if (switchError?.code === 4902) {
-      try {
-        await activeProvider.request({
-          method: 'wallet_addEthereumChain',
-          params: [
-            {
-              chainId: chainIdHex,
-              chainName: testnetBradbury.name,
-              nativeCurrency: testnetBradbury.nativeCurrency,
-              rpcUrls: [...testnetBradbury.rpcUrls.default.http],
-              blockExplorerUrls: testnetBradbury.blockExplorers 
-                ? [testnetBradbury.blockExplorers.default.url] 
-                : [],
-            },
-          ],
-        });
-      } catch (addError) {
-        console.error('Failed to add GenLayer network:', addError);
-      }
-    } else {
-      console.error('Failed to switch network:', switchError);
-    }
-  }
-
-  return client;
-}
-
-// ---------------------------------------------------------------------------
-// Normalizers
-// ---------------------------------------------------------------------------
-
-function pick(obj: any, snake: string, camel: string) {
-  return obj?.[snake] !== undefined ? obj[snake] : obj?.[camel];
-}
-
-function normalizeCampaign(raw: any): CampaignView {
-  return {
-    exists: Boolean(pick(raw, 'exists', 'exists')),
-    campaignId: toNumber(pick(raw, 'campaign_id', 'campaignId')),
-    creator: String(pick(raw, 'creator', 'creator') ?? ''),
-    title: String(pick(raw, 'title', 'title') ?? ''),
-    fundingGoal: toBigInt(pick(raw, 'funding_goal', 'fundingGoal')),
-    totalFunded: toBigInt(pick(raw, 'total_funded', 'totalFunded')),
-    remainingFunds: toBigInt(pick(raw, 'remaining_funds', 'remainingFunds')),
-    currentMilestoneIndex: toNumber(pick(raw, 'current_milestone_index', 'currentMilestoneIndex')),
-    milestoneCount: toNumber(pick(raw, 'milestone_count', 'milestoneCount')),
-    status: String(pick(raw, 'status', 'status') ?? ''),
-  };
-}
-
-function normalizeMilestone(raw: any): MilestoneView {
-  return {
-    exists: Boolean(pick(raw, 'exists', 'exists')),
-    index: toNumber(pick(raw, 'index', 'index')),
-    title: String(pick(raw, 'title', 'title') ?? ''),
-    ratioBps: toNumber(pick(raw, 'ratio_bps', 'ratioBps')),
-    status: String(pick(raw, 'status', 'status') ?? ''),
-    evidenceText: String(pick(raw, 'evidence_text', 'evidenceText') ?? ''),
-    rejectionCount: toNumber(pick(raw, 'rejection_count', 'rejectionCount')),
-    aiFeedback: String(pick(raw, 'ai_feedback', 'aiFeedback') ?? ''),
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Reads
-// ---------------------------------------------------------------------------
-
-export async function getCampaign(campaignId: number): Promise<CampaignView> {
-  const raw = await readClient.readContract({
+export async function getCampaign(id: string): Promise<CampaignView> {
+  const client = getClient();
+  const res: any = await client.readContract({
     address: CONTRACT_ADDRESS,
     functionName: 'get_campaign',
-    args: [campaignId],
+    args: [id],
   });
-  return normalizeCampaign(raw);
+  return toCamelCase(res) as CampaignView;
 }
 
-export async function getMilestone(campaignId: number, index: number): Promise<MilestoneView> {
-  const raw = await readClient.readContract({
+export async function getMilestone(campaignId: string, index: number): Promise<MilestoneView> {
+  const client = getClient();
+  const res: any = await client.readContract({
     address: CONTRACT_ADDRESS,
     functionName: 'get_milestone',
     args: [campaignId, index],
   });
-  return normalizeMilestone(raw);
-}
-
-export async function listCampaigns(options?: {
-  maxScan?: number;
-  missTolerance?: number;
-}): Promise<CampaignView[]> {
-  const maxScan = options?.maxScan ?? 200;
-  const missTolerance = options?.missTolerance ?? 2;
-
-  const campaigns: CampaignView[] = [];
-  let misses = 0;
-  for (let id = 1; id <= maxScan; id++) {
-    try {
-      const campaign = await getCampaign(id);
-      if (campaign.exists) {
-        campaigns.push(campaign);
-        misses = 0;
-      } else {
-        misses++;
-        if (misses >= missTolerance) break;
-      }
-    } catch {
-      misses++;
-      if (misses >= missTolerance) break;
-    }
-  }
-  return campaigns.reverse(); // newest first
+  return toCamelCase(res) as MilestoneView;
 }
 
 export async function getAllMilestones(campaign: CampaignView): Promise<MilestoneView[]> {
-  const indices = Array.from({ length: campaign.milestoneCount }, (_, i) => i);
-  return Promise.all(indices.map((i) => getMilestone(campaign.campaignId, i)));
+  const ms: MilestoneView[] = [];
+  for (let i = 0; i < campaign.milestoneCount; i++) {
+    ms.push(await getMilestone(campaign.campaignId, i));
+  }
+  return ms;
 }
 
-// ---------------------------------------------------------------------------
-// Writes
-// ---------------------------------------------------------------------------
+export async function getPendingWithdrawal(accountAddress: string): Promise<bigint> {
+  const client = getClient();
+  const res: any = await client.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'get_pending_withdrawal',
+    args: [accountAddress],
+  });
+  return BigInt(res);
+}
 
-async function sendWrite(
-  address: `0x${string}`,
-  functionName: string,
-  args: CalldataEncodable[],
-  value: bigint = 0n,
-) {
-  const client = await ensureCorrectNetwork(address);
+export async function withdraw(accountAddress: string) {
+  const client = getClient(accountAddress);
   const hash = await client.writeContract({
     address: CONTRACT_ADDRESS,
-    functionName,
-    args,
-    value,
+    functionName: 'withdraw',
+    args: [],
+    value: 0n,
   });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
+}
 
-  const receipt = await client.waitForTransactionReceipt({
-    hash,
-    status: TransactionStatus.ACCEPTED,
+export async function triggerTimeout(accountAddress: string, campaignId: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'trigger_timeout',
+    args: [campaignId],
+    value: 0n,
   });
-
-  if (receipt.txExecutionResultName === ExecutionResult.FINISHED_WITH_ERROR) {
-    throw new Error(`Transaction executed but reverted (${functionName}). Check the trace for details.`);
-  }
-
-  return { hash, receipt };
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
 export async function createCampaign(
-  address: `0x${string}`,
-  params: {
-    title: string;
-    description: string;
-    fundingGoalWholeTokens: number;
-    milestoneTitles: string[];
-    milestoneDescriptions: string[];
-    milestoneRatiosBps: number[];
-  },
+  accountAddress: string,
+  title: string,
+  description: string,
+  fundingGoal: number,
+  durationDays: number,
+  milestoneTitles: string[],
+  milestoneDescriptions: string[],
+  milestoneRatiosBps: number[]
 ) {
-  return sendWrite(address, 'create_campaign', [
-    params.title,
-    params.description,
-    params.fundingGoalWholeTokens,
-    params.milestoneTitles,
-    params.milestoneDescriptions,
-    params.milestoneRatiosBps,
-  ]);
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'create_campaign',
+    args: [
+      title,
+      description,
+      fundingGoal,
+      durationDays,
+      milestoneTitles,
+      milestoneDescriptions,
+      milestoneRatiosBps,
+    ],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function fundCampaign(address: `0x${string}`, campaignId: number, amountBaseUnits: bigint) {
-  return sendWrite(address, 'fund_campaign', [campaignId], amountBaseUnits);
+export async function fundCampaign(accountAddress: string, campaignId: string, amount: bigint) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'fund_campaign',
+    args: [campaignId],
+    value: amount,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function cancelCampaign(address: `0x${string}`, campaignId: number) {
-  return sendWrite(address, 'cancel_campaign', [campaignId]);
+export async function revokeFunding(accountAddress: string, campaignId: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'revoke_funding',
+    args: [campaignId],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function submitMilestone(address: `0x${string}`, campaignId: number, evidenceText: string) {
-  return sendWrite(address, 'submit_milestone', [campaignId, evidenceText]);
+export async function cancelCampaign(accountAddress: string, campaignId: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'cancel_campaign',
+    args: [campaignId],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function adjudicateMilestone(address: `0x${string}`, campaignId: number) {
-  return sendWrite(address, 'adjudicate_milestone', [campaignId]);
+export async function claimRefund(accountAddress: string, campaignId: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'claim_refund',
+    args: [campaignId],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function claimRefund(address: `0x${string}`, campaignId: number) {
-  return sendWrite(address, 'claim_refund', [campaignId]);
+export async function submitMilestone(accountAddress: string, campaignId: string, evidenceUrl: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'submit_milestone',
+    args: [campaignId, evidenceUrl],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
 
-export async function revokeFunding(address: `0x${string}`, campaignId: number) {
-  return sendWrite(address, 'revoke_funding', [campaignId]);
+export async function adjudicateMilestone(accountAddress: string, campaignId: string) {
+  const client = getClient(accountAddress);
+  const hash = await client.writeContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'adjudicate_milestone',
+    args: [campaignId],
+    value: 0n,
+  });
+  return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
