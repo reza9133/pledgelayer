@@ -4,7 +4,7 @@ PledgeLayer Platform - Complete Intelligent Contract
 ===================================================
 Implemented Pull-Payment pattern for native transfers, 
 str-keys for Calldata compatibility, secure LLM validator handling,
-CEI pattern, evidence web fetching, abandonment timeouts, and campaign counting.
+CEI pattern, evidence web fetching, abandonment timeouts, campaign counting, and campaign description view.
 """
 
 from genlayer import *
@@ -107,6 +107,7 @@ class CampaignView:
     campaign_id: str
     creator: str
     title: str
+    description: str
     funding_goal: u256
     total_funded: u256
     remaining_funds: u256
@@ -446,15 +447,16 @@ class PledgeLayerPlatform(gl.Contract):
             cid = str(campaign_id)
             c = self.campaigns.get(cid, None)
             if c is None:
-                return CampaignView(False, "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
+                return CampaignView(False, "", "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
             return CampaignView(
                 exists=True, campaign_id=c.campaign_id, creator=str(c.creator), title=c.title,
+                description=c.description,
                 funding_goal=c.funding_goal, total_funded=c.total_funded, remaining_funds=c.remaining_funds,
                 current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
                 status=c.status, deadline=c.deadline
             )
         except Exception:
-            return CampaignView(False, "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
+            return CampaignView(False, "", "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
 
     @gl.public.view
     def get_milestone(self, campaign_id: str, milestone_index: u32) -> MilestoneView:
