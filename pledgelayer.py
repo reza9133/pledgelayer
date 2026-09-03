@@ -479,3 +479,8 @@ class PledgeLayerPlatform(gl.Contract):
     @gl.public.view
     def get_campaign_count(self) -> u32:
         return u32(len(self.campaign_ids))
+        
+    @gl.public.view
+    def get_contribution(self, campaign_id: str, account: str) -> u256:
+        contrib_key = f"{str(campaign_id)}_{str(account)}"
+        return self.campaign_contributions.get(contrib_key, u256(0))
