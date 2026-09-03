@@ -2,12 +2,15 @@
 """
 PledgeLayer Platform - Complete Intelligent Contract
 ===================================================
-Implemented native transfers, CEI pattern, and full stranded-funds prevention.
+Implemented Pull-Payment pattern for native transfers, 
+str-keys for Calldata compatibility, secure LLM validator handling,
+CEI pattern, evidence web fetching, and abandonment timeouts.
 """
 
 from genlayer import *
 from dataclasses import dataclass
 import json
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # 1. Native Transfer Interface
@@ -22,28 +25,34 @@ class _Recipient:
 # ---------------------------------------------------------------------------
 # 2. Top-Level Non-Deterministic AI Module (Consensus Wrapper)
 # ---------------------------------------------------------------------------
-def _evaluate_milestone_nondet(m_title: str, m_desc: str, m_evidence_text: str) -> dict:
-    prompt = f"""
-    You are an elite, impartial Web3 Adjudicator.
-    Evaluate the submitted milestone deliverable against its requirements.
-
-    --- CONTEXT ---
-    Title: {m_title}
-    Requirements: {m_desc}
-
-    --- SUBMITTED EVIDENCE ---
-    {m_evidence_text}
-
-    Evaluate based on Completeness, Quality, and Security.
-    Output ONLY a JSON object strictly matching this schema:
-    {{
-        "decision": "APPROVED",
-        "detailed_feedback": "Concise reasoning."
-    }}
-    (Use "REJECTED" for the decision if the criteria are not adequately met).
-    """
-
+def _evaluate_milestone_nondet(m_title: str, m_desc: str, evidence_url: str) -> dict:
     def leader_fn():
+        try:
+            res = gl.nondet.web.get(evidence_url)
+            fetched_content = res.body.decode('utf-8')[:15000]
+        except Exception as e:
+            fetched_content = f"Failed to fetch evidence URL: {str(e)}"
+
+        prompt = f"""
+        You are an elite, impartial Web3 Adjudicator.
+        Evaluate the submitted milestone deliverable against its requirements.
+
+        --- CONTEXT ---
+        Title: {m_title}
+        Requirements: {m_desc}
+        Evidence URL: {evidence_url}
+
+        --- FETCHED EVIDENCE CONTENT ---
+        {fetched_content}
+
+        Evaluate based on Completeness, Quality, and Security.
+        Output ONLY a JSON object strictly matching this schema:
+        {{
+            "decision": "APPROVED",
+            "detailed_feedback": "Concise reasoning."
+        }}
+        (Use "REJECTED" for the decision if the criteria are not adequately met).
+        """
         raw = gl.nondet.exec_prompt(prompt, response_format="json")
         if not isinstance(raw, dict) or raw.get("decision") not in ("APPROVED", "REJECTED"):
             raise gl.vm.UserError("LLM returned a malformed adjudication result")
@@ -52,9 +61,11 @@ def _evaluate_milestone_nondet(m_title: str, m_desc: str, m_evidence_text: str) 
     def validator_fn(leader_result) -> bool:
         if not isinstance(leader_result, gl.vm.Return):
             return False
-        validator_data = leader_fn()
-        leader_data = leader_result.calldata
-        return leader_data.get("decision") == validator_data.get("decision")
+        try:
+            validator_data = leader_fn()
+        except Exception:
+            return False
+        return leader_result.calldata.get("decision") == validator_data.get("decision")
 
     return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
@@ -65,7 +76,7 @@ def _evaluate_milestone_nondet(m_title: str, m_desc: str, m_evidence_text: str) 
 @allow_storage
 @dataclass
 class Campaign:
-    campaign_id: u32
+    campaign_id: str
     creator: Address
     title: str
     description: str
@@ -75,24 +86,25 @@ class Campaign:
     current_milestone_index: u32
     milestone_count: u32
     status: str
+    deadline: u256
 
 @allow_storage
 @dataclass
 class Milestone:
-    campaign_id: u32
+    campaign_id: str
     index: u32
     title: str
     description: str
     ratio_bps: u32
     status: str
-    evidence_text: str
+    evidence_url: str
     rejection_count: u32
     ai_feedback: str
 
 @dataclass
 class CampaignView:
     exists: bool
-    campaign_id: u32
+    campaign_id: str
     creator: str
     title: str
     funding_goal: u256
@@ -101,6 +113,7 @@ class CampaignView:
     current_milestone_index: u32
     milestone_count: u32
     status: str
+    deadline: u256
 
 @dataclass
 class MilestoneView:
@@ -109,7 +122,7 @@ class MilestoneView:
     title: str
     ratio_bps: u32
     status: str
-    evidence_text: str
+    evidence_url: str
     rejection_count: u32
     ai_feedback: str
 
@@ -122,42 +135,49 @@ class PledgeLayerPlatform(gl.Contract):
     platform_fee_bps: u32
     next_campaign_id: u32
     
-    campaigns: TreeMap[u32, Campaign]
-    campaign_ids: DynArray[u32]
-    
+    campaigns: TreeMap[str, Campaign]
+    campaign_ids: DynArray[str]
     campaign_milestones: TreeMap[str, Milestone]
     campaign_contributions: TreeMap[str, u256]
+    pending_withdrawals: TreeMap[str, u256]
 
     def __init__(self):
         self.platform_owner = gl.message.sender_address
         self.platform_fee_bps = u32(250)
         self.next_campaign_id = u32(1)
 
-    def _get_campaign_or_raise(self, cid: u32) -> Campaign:
+    def _get_campaign_or_raise(self, cid: str) -> Campaign:
         c = self.campaigns.get(cid, None)
         if c is None:
             raise gl.vm.UserError("Campaign does not exist")
         return c
+
+    def _add_withdrawal(self, account: str, amount: int) -> None:
+        if amount > 0:
+            prev = self.pending_withdrawals.get(account, u256(0))
+            self.pending_withdrawals[account] = u256(int(prev) + amount)
 
     # =====================================================================
     # WRITE METHODS
     # =====================================================================
     @gl.public.write
     def create_campaign(
-        self, title: str, description: str, funding_goal_whole_tokens: u32, 
+        self, title: str, description: str, funding_goal_whole_tokens: u32, duration_days: u32,
         milestone_titles: list[str], milestone_descriptions: list[str], milestone_ratios_bps: list[u32]
-    ) -> u32:
+    ) -> str:
         title = str(title)
         description = str(description)
         
         if int(funding_goal_whole_tokens) == 0:
             raise gl.vm.UserError("Funding goal must be at least 1 token")
+        if int(duration_days) == 0:
+            raise gl.vm.UserError("Duration must be at least 1 day")
         if len(title) == 0:
             raise gl.vm.UserError("Title cannot be empty")
             
         funding_goal = u256(int(funding_goal_whole_tokens) * (10**18))
-        
         m_count = len(milestone_titles)
+        
         if m_count == 0 or len(milestone_descriptions) != m_count or len(milestone_ratios_bps) != m_count:
             raise gl.vm.UserError("Milestone array sizes mismatch or empty")
             
@@ -165,31 +185,35 @@ class PledgeLayerPlatform(gl.Contract):
         if total_ratio != 10000:
             raise gl.vm.UserError("Milestone ratios must sum to exactly 10000 bps")
 
-        cid = self.next_campaign_id
-        self.next_campaign_id = u32(int(cid) + 1)
+        cid = str(self.next_campaign_id)
+        self.next_campaign_id = u32(int(self.next_campaign_id) + 1)
+        
+        now = int(datetime.now(timezone.utc).timestamp())
+        deadline = u256(now + int(duration_days) * 86400)
 
         self.campaigns[cid] = Campaign(
             campaign_id=cid, creator=gl.message.sender_address, title=title, description=description,
             funding_goal=funding_goal, total_funded=u256(0), remaining_funds=u256(0),
-            current_milestone_index=u32(0), milestone_count=u32(m_count), status="FUNDING"
+            current_milestone_index=u32(0), milestone_count=u32(m_count), status="FUNDING",
+            deadline=deadline
         )
         self.campaign_ids.append(cid)
 
         for i in range(m_count):
-            m_key = f"{int(cid)}_{i}"
+            m_key = f"{cid}_{i}"
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=cid, index=u32(i), title=str(milestone_titles[i]),
                 description=str(milestone_descriptions[i]), ratio_bps=u32(milestone_ratios_bps[i]),
-                status="PENDING", evidence_text="", rejection_count=u32(0), ai_feedback=""
+                status="PENDING", evidence_url="", rejection_count=u32(0), ai_feedback=""
             )
             
         return cid
 
     @gl.public.write.payable
-    def fund_campaign(self, campaign_id: u32) -> None:
-        cid = u32(campaign_id)
+    def fund_campaign(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
         deposit = u256(gl.message.value)
-        backer = gl.message.sender_address
+        backer = str(gl.message.sender_address)
 
         c = self._get_campaign_or_raise(cid)
         if c.status != "FUNDING":
@@ -197,7 +221,7 @@ class PledgeLayerPlatform(gl.Contract):
         if deposit == u256(0):
             raise gl.vm.UserError("Must send a positive amount")
 
-        contrib_key = f"{int(cid)}_{str(backer)}"
+        contrib_key = f"{cid}_{backer}"
         prev_contrib = self.campaign_contributions.get(contrib_key, u256(0))
         self.campaign_contributions[contrib_key] = u256(int(prev_contrib) + int(deposit))
 
@@ -208,40 +232,57 @@ class PledgeLayerPlatform(gl.Contract):
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
             funding_goal=c.funding_goal, total_funded=new_total, 
             remaining_funds=u256(int(c.remaining_funds) + int(deposit)),
-            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=new_status
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+            status=new_status, deadline=c.deadline
         )
 
     @gl.public.write
-    def revoke_funding(self, campaign_id: u32) -> None:
-        """Allows backers to withdraw funds if the campaign is indefinitely underfunded (stuck in FUNDING)."""
-        cid = u32(campaign_id)
-        player = gl.message.sender_address
+    def trigger_timeout(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
+        c = self._get_campaign_or_raise(cid)
+        
+        if c.status not in ["FUNDING", "ACTIVE"]:
+            raise gl.vm.UserError("Campaign is not in a state that can time out")
+            
+        now = int(datetime.now(timezone.utc).timestamp())
+        if now <= int(c.deadline):
+            raise gl.vm.UserError("Deadline has not passed yet")
+            
+        self.campaigns[cid] = Campaign(
+            campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
+            funding_goal=c.funding_goal, total_funded=c.total_funded, remaining_funds=c.remaining_funds,
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+            status="FAILED", deadline=c.deadline
+        )
+
+    @gl.public.write
+    def revoke_funding(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
+        player = str(gl.message.sender_address)
         c = self._get_campaign_or_raise(cid)
         
         if c.status != "FUNDING":
             raise gl.vm.UserError("Can only revoke funds during the FUNDING phase")
 
-        contrib_key = f"{int(cid)}_{str(player)}"
+        contrib_key = f"{cid}_{player}"
         user_contrib = self.campaign_contributions.get(contrib_key, u256(0))
         if user_contrib == u256(0):
             raise gl.vm.UserError("No contribution found")
 
-        # CEI: Apply Effects First
         self.campaign_contributions[contrib_key] = u256(0)
         self.campaigns[cid] = Campaign(
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
             funding_goal=c.funding_goal, 
             total_funded=u256(int(c.total_funded) - int(user_contrib)), 
             remaining_funds=u256(int(c.remaining_funds) - int(user_contrib)),
-            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+            status=c.status, deadline=c.deadline
         )
-
-        # CEI: Interaction
-        _Recipient(Address(str(player))).emit_transfer(value=user_contrib)
+        self._add_withdrawal(player, int(user_contrib))
 
     @gl.public.write
-    def cancel_campaign(self, campaign_id: u32) -> None:
-        cid = u32(campaign_id)
+    def cancel_campaign(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
         c = self._get_campaign_or_raise(cid)
         
         if gl.message.sender_address != c.creator:
@@ -252,23 +293,24 @@ class PledgeLayerPlatform(gl.Contract):
         self.campaigns[cid] = Campaign(
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
             funding_goal=c.funding_goal, total_funded=c.total_funded, remaining_funds=c.remaining_funds,
-            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status="CANCELLED"
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+            status="CANCELLED", deadline=c.deadline
         )
 
     @gl.public.write
-    def submit_milestone(self, campaign_id: u32, evidence_text: str) -> None:
-        cid = u32(campaign_id)
-        text = str(evidence_text)
+    def submit_milestone(self, campaign_id: str, evidence_url: str) -> None:
+        cid = str(campaign_id)
+        url = str(evidence_url)
         c = self._get_campaign_or_raise(cid)
         
         if gl.message.sender_address != c.creator:
             raise gl.vm.UserError("Unauthorized")
         if c.status != "ACTIVE":
             raise gl.vm.UserError("Campaign is not ACTIVE")
-        if len(text) == 0:
-            raise gl.vm.UserError("Evidence text cannot be empty")
+        if len(url) == 0 or not url.startswith("http"):
+            raise gl.vm.UserError("Valid Evidence URL is required")
 
-        m_key = f"{int(cid)}_{int(c.current_milestone_index)}"
+        m_key = f"{cid}_{int(c.current_milestone_index)}"
         m = self.campaign_milestones.get(m_key, None)
         
         if m is None or m.status not in ["PENDING", "REJECTED"]:
@@ -276,25 +318,25 @@ class PledgeLayerPlatform(gl.Contract):
 
         self.campaign_milestones[m_key] = Milestone(
             campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description,
-            ratio_bps=m.ratio_bps, status="SUBMITTED", evidence_text=text, 
+            ratio_bps=m.ratio_bps, status="SUBMITTED", evidence_url=url, 
             rejection_count=m.rejection_count, ai_feedback=m.ai_feedback
         )
 
     @gl.public.write
-    def adjudicate_milestone(self, campaign_id: u32) -> None:
-        cid = u32(campaign_id)
+    def adjudicate_milestone(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
         c = self._get_campaign_or_raise(cid)
         
         if c.status != "ACTIVE":
             raise gl.vm.UserError("Campaign is not ACTIVE")
 
-        m_key = f"{int(cid)}_{int(c.current_milestone_index)}"
+        m_key = f"{cid}_{int(c.current_milestone_index)}"
         m = self.campaign_milestones.get(m_key, None)
         
         if m is None or m.status != "SUBMITTED":
             raise gl.vm.UserError("Milestone not awaiting adjudication")
 
-        result = _evaluate_milestone_nondet(str(m.title), str(m.description), str(m.evidence_text))
+        result = _evaluate_milestone_nondet(str(m.title), str(m.description), str(m.evidence_url))
         decision = result.get("decision", "REJECTED")
         feedback = result.get("detailed_feedback", "No feedback provided")
 
@@ -312,10 +354,9 @@ class PledgeLayerPlatform(gl.Contract):
             plat_fee = (actual_payout * int(self.platform_fee_bps)) // 10000
             creator_payout = actual_payout - plat_fee
             
-            # CEI: Apply Effects First
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description, 
-                ratio_bps=m.ratio_bps, status="APPROVED", evidence_text=m.evidence_text, 
+                ratio_bps=m.ratio_bps, status="APPROVED", evidence_url=m.evidence_url, 
                 rejection_count=m.rejection_count, ai_feedback=str(feedback)
             )
             
@@ -323,14 +364,12 @@ class PledgeLayerPlatform(gl.Contract):
                 campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
                 funding_goal=c.funding_goal, total_funded=c.total_funded, 
                 remaining_funds=u256(int(c.remaining_funds) - actual_payout),
-                current_milestone_index=new_idx, milestone_count=c.milestone_count, status="COMPLETED" if is_final else "ACTIVE"
+                current_milestone_index=new_idx, milestone_count=c.milestone_count, 
+                status="COMPLETED" if is_final else "ACTIVE", deadline=c.deadline
             )
             
-            # CEI: Interactions (Native Transfers)
-            if creator_payout > 0:
-                _Recipient(Address(str(c.creator))).emit_transfer(value=u256(creator_payout))
-            if plat_fee > 0:
-                _Recipient(Address(str(self.platform_owner))).emit_transfer(value=u256(plat_fee))
+            self._add_withdrawal(str(c.creator), creator_payout)
+            self._add_withdrawal(str(self.platform_owner), plat_fee)
                 
         else:
             new_rejects = u32(int(m.rejection_count) + 1)
@@ -338,26 +377,27 @@ class PledgeLayerPlatform(gl.Contract):
             
             self.campaign_milestones[m_key] = Milestone(
                 campaign_id=m.campaign_id, index=m.index, title=m.title, description=m.description, 
-                ratio_bps=m.ratio_bps, status="REJECTED", evidence_text=m.evidence_text, 
+                ratio_bps=m.ratio_bps, status="REJECTED", evidence_url=m.evidence_url, 
                 rejection_count=new_rejects, ai_feedback=str(feedback)
             )
             
             self.campaigns[cid] = Campaign(
                 campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
                 funding_goal=c.funding_goal, total_funded=c.total_funded, remaining_funds=c.remaining_funds,
-                current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=new_status
+                current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+                status=new_status, deadline=c.deadline
             )
 
     @gl.public.write
-    def claim_refund(self, campaign_id: u32) -> None:
-        cid = u32(campaign_id)
-        player = gl.message.sender_address
+    def claim_refund(self, campaign_id: str) -> None:
+        cid = str(campaign_id)
+        player = str(gl.message.sender_address)
         
         c = self._get_campaign_or_raise(cid)
         if c.status not in ["FAILED", "CANCELLED"]:
             raise gl.vm.UserError("Refunds not available")
 
-        contrib_key = f"{int(cid)}_{str(player)}"
+        contrib_key = f"{cid}_{player}"
         user_contrib = self.campaign_contributions.get(contrib_key, u256(0))
         if user_contrib == u256(0):
             raise gl.vm.UserError("No claimable contribution found")
@@ -368,76 +408,70 @@ class PledgeLayerPlatform(gl.Contract):
         if total_funded <= 0 or remaining <= 0:
             raise gl.vm.UserError("No escrow remaining to refund")
 
-        # Pro-rata share of whatever is still sitting in escrow, not the
-        # backer's full original contribution. A CANCELLED campaign never
-        # had a milestone payout (cancel_campaign only allows CANCELLED
-        # from FUNDING), so remaining == total_funded there and this
-        # reduces to a full refund exactly as before. A FAILED campaign
-        # can arrive here after one or more milestones already paid out,
-        # so remaining < total_funded -- refunding backers their full
-        # original stake would overdraw the escrow, letting whichever
-        # backer claims first drain it and making every later, equally
-        # valid claim_refund call revert with "Invalid refund math".
         r_amount = (int(user_contrib) * remaining) // total_funded
 
         if r_amount > remaining:
             raise gl.vm.UserError("Invalid refund math")
 
-        # CEI: Apply Effects First. Shrink total_funded by this backer's
-        # full original stake (not just their payout) alongside
-        # remaining_funds. That keeps remaining_funds / total_funded
-        # constant for backers who haven't claimed yet, so the next
-        # claim is still computed against its correct pro-rata share of
-        # the original escrow instead of a pool another backer's claim
-        # already (correctly) partially drained. total_funded is never
-        # read again once a campaign leaves FUNDING/ACTIVE, so this is
-        # safe to adjust here.
         self.campaign_contributions[contrib_key] = u256(0)
         self.campaigns[cid] = Campaign(
             campaign_id=c.campaign_id, creator=c.creator, title=c.title, description=c.description,
             funding_goal=c.funding_goal,
             total_funded=u256(total_funded - int(user_contrib)),
             remaining_funds=u256(remaining - r_amount),
-            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
+            current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+            status=c.status, deadline=c.deadline
         )
 
-        # CEI: Interactions (Native Transfer). r_amount can round down to
-        # 0 for a dust-sized contribution against a much larger pool --
-        # that's a legitimate (if unlucky) outcome, not an error, so skip
-        # the transfer rather than reverting the whole claim.
-        if r_amount > 0:
-            _Recipient(Address(str(player))).emit_transfer(value=u256(r_amount))
+        self._add_withdrawal(player, r_amount)
+
+    @gl.public.write
+    def withdraw(self) -> None:
+        """Allows users (creators, backers, platform) to pull their pending funds."""
+        player = str(gl.message.sender_address)
+        amount = int(self.pending_withdrawals.get(player, u256(0)))
+        
+        if amount == 0:
+            raise gl.vm.UserError("No funds to withdraw")
+            
+        self.pending_withdrawals[player] = u256(0)
+        _Recipient(Address(player)).emit_transfer(value=u256(amount))
 
     # =====================================================================
     # VIEW METHODS
     # =====================================================================
     @gl.public.view
-    def get_campaign(self, campaign_id: u32) -> CampaignView:
+    def get_campaign(self, campaign_id: str) -> CampaignView:
         try:
-            cid = u32(campaign_id)
+            cid = str(campaign_id)
             c = self.campaigns.get(cid, None)
             if c is None:
-                return CampaignView(False, u32(0), "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "")
+                return CampaignView(False, "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
             return CampaignView(
                 exists=True, campaign_id=c.campaign_id, creator=str(c.creator), title=c.title,
                 funding_goal=c.funding_goal, total_funded=c.total_funded, remaining_funds=c.remaining_funds,
-                current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, status=c.status
+                current_milestone_index=c.current_milestone_index, milestone_count=c.milestone_count, 
+                status=c.status, deadline=c.deadline
             )
         except Exception:
-            return CampaignView(False, u32(0), "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "")
+            return CampaignView(False, "", "", "", u256(0), u256(0), u256(0), u32(0), u32(0), "", u256(0))
 
     @gl.public.view
-    def get_milestone(self, campaign_id: u32, milestone_index: u32) -> MilestoneView:
+    def get_milestone(self, campaign_id: str, milestone_index: u32) -> MilestoneView:
         try:
-            m_key = f"{int(u32(campaign_id))}_{int(u32(milestone_index))}"
+            m_key = f"{str(campaign_id)}_{int(u32(milestone_index))}"
             m = self.campaign_milestones.get(m_key, None)
             if m is None:
                 return MilestoneView(False, u32(0), "", u32(0), "", "", u32(0), "")
                 
             return MilestoneView(
                 exists=True, index=m.index, title=m.title, ratio_bps=m.ratio_bps,
-                status=m.status, evidence_text=m.evidence_text, 
+                status=m.status, evidence_url=m.evidence_url, 
                 rejection_count=m.rejection_count, ai_feedback=m.ai_feedback
             )
         except Exception:
             return MilestoneView(False, u32(0), "", u32(0), "", "", u32(0), "")
+            
+    @gl.public.view
+    def get_pending_withdrawal(self, account: str) -> u256:
+        return self.pending_withdrawals.get(str(account), u256(0))
