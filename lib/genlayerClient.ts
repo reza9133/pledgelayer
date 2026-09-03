@@ -178,3 +178,26 @@ export async function adjudicateMilestone(accountAddress: string, campaignId: st
   });
   return client.waitForTransactionReceipt({ hash, status: 'FINALIZED' });
 }
+
+export async function listCampaigns(): Promise<CampaignView[]> {
+  const campaigns: CampaignView[] = [];
+  let id = 1;
+  let consecutiveMisses = 0;
+  
+  while (consecutiveMisses < 2) {
+    try {
+      const c = await getCampaign(id.toString());
+      if (c.exists) {
+        campaigns.push(c);
+        consecutiveMisses = 0;
+      } else {
+        consecutiveMisses++;
+      }
+    } catch (err) {
+      consecutiveMisses++;
+    }
+    id++;
+  }
+  
+  return campaigns;
+}
