@@ -71,6 +71,16 @@ export async function getPendingWithdrawal(accountAddress: string): Promise<bigi
   return BigInt(res);
 }
 
+export async function getCampaignCount(): Promise<number> {
+  const client = getClient();
+  const res: any = await client.readContract({
+    address: CONTRACT_ADDRESS,
+    functionName: 'get_campaign_count',
+    args: [],
+  });
+  return Number(res || 0);
+}
+
 export async function withdraw(accountAddress: string) {
   const client = getClient(accountAddress);
   const hash = await client.writeContract({
@@ -188,24 +198,41 @@ export async function adjudicateMilestone(accountAddress: string, campaignId: st
 }
 
 export async function listCampaigns(): Promise<CampaignView[]> {
-  const campaigns: CampaignView[] = [];
-  let id = 1;
-  let consecutiveMisses = 0;
-  
-  while (consecutiveMisses < 2) {
-    try {
-      const c = await getCampaign(id.toString());
-      if (c.exists) {
-        campaigns.push(c);
-        consecutiveMisses = 0;
-      } else {
+  try {
+    const total = await getCampaignCount();
+    const campaigns: CampaignView[] = [];
+    for (let i = 1; i <= total; i++) {
+      try {
+        const c = await getCampaign(i.toString());
+        if (c.exists) {
+          campaigns.push(c);
+        }
+      } catch (err) {
+        // Skip missing or failed fetches
+      }
+    }
+    return campaigns;
+  } catch (err) {
+    // Fallback if contract method is not yet synced
+    const campaigns: CampaignView[] = [];
+    let id = 1;
+    let consecutiveMisses = 0;
+    
+    while (consecutiveMisses < 2) {
+      try {
+        const c = await getCampaign(id.toString());
+        if (c.exists) {
+          campaigns.push(c);
+          consecutiveMisses = 0;
+        } else {
+          consecutiveMisses++;
+        }
+      } catch (err) {
         consecutiveMisses++;
       }
-    } catch (err) {
-      consecutiveMisses++;
+      id++;
     }
-    id++;
+    
+    return campaigns;
   }
-  
-  return campaigns;
 }
