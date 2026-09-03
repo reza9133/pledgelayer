@@ -3,6 +3,12 @@ import { testnetBradbury } from 'genlayer-js/chains';
 import { CONTRACT_ADDRESS } from './contract';
 import type { CampaignView, MilestoneView } from './types';
 
+let activeProvider: any = null;
+
+export function setActiveProvider(provider: any) {
+  activeProvider = provider;
+}
+
 function toCamelCase(obj: any): any {
   if (Array.isArray(obj)) {
     return obj.map((v) => toCamelCase(v));
@@ -22,6 +28,7 @@ export function getClient(accountAddress?: string) {
   return createClient({
     chain: testnetBradbury,
     account: accountAddress ? (accountAddress as `0x${string}`) : undefined,
+    provider: activeProvider,
   });
 }
 
