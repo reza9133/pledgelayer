@@ -120,12 +120,12 @@ class MilestoneView:
     exists: bool
     index: u32
     title: str
+    description: str 
     ratio_bps: u32
     status: str
     evidence_url: str
     rejection_count: u32
     ai_feedback: str
-
 
 # ---------------------------------------------------------------------------
 # 4. Contract Implementation
@@ -462,15 +462,15 @@ class PledgeLayerPlatform(gl.Contract):
             m_key = f"{str(campaign_id)}_{int(u32(milestone_index))}"
             m = self.campaign_milestones.get(m_key, None)
             if m is None:
-                return MilestoneView(False, u32(0), "", u32(0), "", "", u32(0), "")
+                return MilestoneView(False, u32(0), "", "", u32(0), "", "", u32(0), "")
                 
             return MilestoneView(
-                exists=True, index=m.index, title=m.title, ratio_bps=m.ratio_bps,
+                exists=True, index=m.index, title=m.title, description=m.description, ratio_bps=m.ratio_bps,
                 status=m.status, evidence_url=m.evidence_url, 
                 rejection_count=m.rejection_count, ai_feedback=m.ai_feedback
             )
         except Exception:
-            return MilestoneView(False, u32(0), "", u32(0), "", "", u32(0), "")
+            return MilestoneView(False, u32(0), "", "", u32(0), "", "", u32(0), "")
             
     @gl.public.view
     def get_pending_withdrawal(self, account: str) -> u256:
