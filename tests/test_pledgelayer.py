@@ -52,9 +52,15 @@ def test_payout_and_surplus(direct_vm, direct_deploy, direct_alice, direct_bob, 
     direct_vm.sender = direct_alice
     cid = contract.create_campaign("Test Campaign", "Desc", 10, 30, ["M1"], ["M1 Desc"], [10000])
 
+    # Test campaign count and milestone description view coverage
+    assert contract.get_campaign_count() == 1
+    m_view = contract.get_milestone(cid, u32(0))
+    assert m_view.description == "M1 Desc"
+
     # 2. Overfund the campaign to test surplus (Bob sends 15 Tokens against a
     # 10-token goal) via the real payable call.
     _fund(direct_vm, contract, cid, direct_bob, 15 * 10**18)
+    assert contract.get_contribution(cid, str(direct_bob)) == 15 * 10**18
 
     # 3. Submit Evidence URL
     direct_vm.sender = direct_alice
@@ -105,6 +111,7 @@ def test_indefinitely_underfunded_withdrawal(direct_vm, direct_deploy, direct_al
 
     # Bob funds half the goal (5 Tokens) via the real payable call.
     _fund(direct_vm, contract, cid, direct_bob, 5 * 10**18)
+    assert contract.get_contribution(cid, str(direct_bob)) == 5 * 10**18
 
     # Assert it's stuck in funding
     assert contract.get_campaign(cid).status == "FUNDING"
