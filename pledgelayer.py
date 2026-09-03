@@ -4,7 +4,7 @@ PledgeLayer Platform - Complete Intelligent Contract
 ===================================================
 Implemented Pull-Payment pattern for native transfers, 
 str-keys for Calldata compatibility, secure LLM validator handling,
-CEI pattern, evidence web fetching, and abandonment timeouts.
+CEI pattern, evidence web fetching, abandonment timeouts, and campaign counting.
 """
 
 from genlayer import *
@@ -475,3 +475,7 @@ class PledgeLayerPlatform(gl.Contract):
     @gl.public.view
     def get_pending_withdrawal(self, account: str) -> u256:
         return self.pending_withdrawals.get(str(account), u256(0))
+
+    @gl.public.view
+    def get_campaign_count(self) -> u32:
+        return u32(len(self.campaign_ids))
