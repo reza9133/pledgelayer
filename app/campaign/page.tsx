@@ -106,12 +106,12 @@ function CampaignDetail({ id }: { id: string }) {
     }
   }
 
-  async function handleSubmitEvidence(url: string) {
+  async function handleSubmitEvidence(url: string, evidenceHash: string) {
     if (!address) return push('Connect your wallet first.', 'error');
     setBusy('submit');
     try {
-      await submitMilestone(address, id, url);
-      push('Evidence URL submitted for adjudication.', 'success');
+      await submitMilestone(address, id, url, evidenceHash);
+      push('Evidence URL and hash submitted for adjudication.', 'success');
       await load();
     } catch (err: any) {
       push(err?.message ?? 'Submission failed.', 'error');
