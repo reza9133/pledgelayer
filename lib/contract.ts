@@ -7,7 +7,7 @@
  * in README.md).
  */
 export const CONTRACT_ADDRESS = (process.env.NEXT_PUBLIC_CONTRACT_ADDRESS ||
-  '0x5C5a5748b47424e7F805C67F89aa4c85067D1749') as `0x${string}`;
+  '0x0faDadaCD22c3033AC8042BF042c91baf0c4146c') as `0x${string}`;
 
 // Human-readable label for the network this dApp targets.
 export const NETWORK_LABEL = 'GenLayer Bradbury Testnet';
