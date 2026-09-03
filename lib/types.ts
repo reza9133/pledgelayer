@@ -25,6 +25,7 @@ export interface MilestoneView {
   ratioBps: number;
   status: MilestoneStatus | string;
   evidenceUrl: string;
+  evidenceHash: string;
   rejectionCount: number;
   aiFeedback: string;
 }
