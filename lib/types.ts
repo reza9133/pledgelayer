@@ -6,6 +6,7 @@ export interface CampaignView {
   campaignId: string;
   creator: string;
   title: string;
+  description: string; 
   fundingGoal: bigint;
   totalFunded: bigint;
   remainingFunds: bigint;
