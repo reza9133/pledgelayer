@@ -223,18 +223,18 @@ This app builds to a fully static site (`output: 'export'` in `next.config.js`) 
 
 GenLayer Intelligent Contracts are Python classes running on GenVM, not standard EVM/Solidity contracts — that's why the frontend uses `genlayer-js`, not raw `ethers`/`viem`. A few things worth knowing before treating this as final:
 
-1. **`get_campaign` / `get_milestone` field shapes aren't verified against a live chain.** `lib/genlayerClient.ts` runs every response through a generic `toCamelCase()` converter (snake_case → camelCase), but before you trust it in production, run a real `readContract` call against Bradbury and confirm the wire shape actually matches `CampaignView`/`MilestoneView` in `lib/types.ts`.
-2. **`CampaignView` has no `description` field**, so the campaign detail page only shows the title, not the description passed into `create_campaign`.
-
-None of this blocks using the app as-is (everything degrades gracefully), but decide whether to patch the contract or live with these workarounds before going further.
+ 1. **`get_campaign` / `get_milestone` field shapes aren't verified against a live chain.** `lib/genlayerClient.ts` runs every response through a generic `toCamelCase()` converter (snake_case → camelCase), but before you trust it in production, run a real `readContract` call against Bradbury and confirm the wire shape actually matches `CampaignView`/`MilestoneView` in `lib/types.ts`.
+ 2. **`CampaignView` has no `description` field**, so the campaign detail page only shows the title, not the description passed into `create_campaign`.
+ 
+ None of this blocks using the app as-is (everything degrades gracefully), but decide whether to patch the contract or live with these workarounds before going further.
 
 ---
 
-## 🗺️ Ideas for future work
-
-- Surface the campaign `description` on the detail page (requires adding the field to `CampaignView`)
-- Index events/transaction history per campaign instead of only reading current state
-- Add more test coverage for repeated-rejection, cancellation, and `revoke_funding` paths
+ ## 🗺️ Ideas for future work
+ 
+-- Surface the campaign `description` on the detail page (requires adding the field to `CampaignView`)
+ - Index events/transaction history per campaign instead of only reading current state
+ - Add more test coverage for repeated-rejection, cancellation, and `revoke_funding` paths
 
 ---
 
