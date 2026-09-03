@@ -185,12 +185,17 @@ export async function claimRefund(accountAddress: string, campaignId: string) {
   return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
 }
 
-export async function submitMilestone(accountAddress: string, campaignId: string, evidenceUrl: string) {
+export async function submitMilestone(
+  accountAddress: string,
+  campaignId: string,
+  evidenceUrl: string,
+  evidenceHash: string
+) {
   const client = getClient(accountAddress);
   const hash = await client.writeContract({
     address: CONTRACT_ADDRESS,
     functionName: 'submit_milestone',
-    args: [campaignId, evidenceUrl],
+    args: [campaignId, evidenceUrl, evidenceHash],
     value: 0n,
   });
   return client.waitForTransactionReceipt({ hash, status: TransactionStatus.FINALIZED });
